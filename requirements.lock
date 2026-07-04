@@ -1,0 +1,11 @@
+# Pinned runtime dependency closure for reproducible installs.
+#
+# Generated from the tested environment (Python 3.11+). Install with:
+#   python -m pip install -r requirements.lock
+#
+# The project's loose ranges live in pyproject.toml; this file pins exact
+# versions of the runtime dependency tree (cryptography and its transitive
+# dependencies) so a fresh clone resolves to a known-good set.
+cryptography==44.0.3
+cffi==2.0.0
+pycparser==3.0
