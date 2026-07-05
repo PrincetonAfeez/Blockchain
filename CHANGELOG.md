@@ -47,6 +47,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   PID is confirmed dead; the registry is preserved when shutdown is incomplete.
   Each registered node is stopped independently; malformed config on one node does
   not prevent stop attempts on the others.
+- POSIX `process_is_running()` treats `/proc/<pid>/stat` state `Z` (zombie) as not
+  live, so unreaped children do not block shutdown or registry dismissal.
 - Consensus validation rejects malformed `tc1` recipients on imported normal
   transactions and malformed coinbase recipients on imported non-genesis blocks.
 - `local-network.json` paths are resolved and contained under the network root

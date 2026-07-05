@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import os
-import subprocess
-
 import pytest
 
 from toychain.constants import PERSISTENCE_SCHEMA_VERSION
@@ -16,17 +13,11 @@ from toychain.process import (
     stop_local_network,
     stop_node,
 )
+from tests.kill_helpers import kill_and_reap_pid
 
 
 def _kill_pid(pid: int) -> None:
-    if os.name == "nt":
-        subprocess.run(
-            ["taskkill", "/F", "/T", "/PID", str(pid)],
-            capture_output=True,
-            check=False,
-        )
-    else:
-        os.kill(pid, 9)
+    kill_and_reap_pid(pid)
 
 
 def test_malformed_config_on_first_node_does_not_block_stop_of_second(tmp_path, monkeypatch):

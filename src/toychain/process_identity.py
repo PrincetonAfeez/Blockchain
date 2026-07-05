@@ -68,6 +68,15 @@ def process_is_running(pid: int) -> bool:
         if not success:
             return False
         return exit_code.value == still_active
+
+    stat_path = Path(f"/proc/{pid}/stat")
+    try:
+        fields = stat_path.read_text(encoding="ascii").split()
+        if len(fields) > 2 and fields[2] == "Z":
+            return False
+    except OSError:
+        pass
+
     try:
         os.kill(pid, 0)
         return True

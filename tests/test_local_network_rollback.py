@@ -7,6 +7,8 @@ from dataclasses import replace
 
 import pytest
 
+from tests.kill_helpers import kill_and_reap_pid
+
 from toychain.errors import NodeRuntimeError
 from toychain.persistence import DataStore
 from toychain.process import (
@@ -56,17 +58,8 @@ def test_rollback_preserves_registry_when_stop_refused_and_pid_live(tmp_path, mo
     assert recovery["startup_error"] == "simulated later startup failure"
 
     live_pid = recovery["nodes"][0]["pid"]
-    try:
-        if process_is_running(live_pid):
-            import os
-            import signal
-
-            if os.name == "nt":
-                os.system(f"taskkill /F /PID {live_pid}")
-            else:
-                os.kill(live_pid, signal.SIGKILL)
-    finally:
-        pass
+    if live_pid is not None and process_is_running(live_pid):
+        kill_and_reap_pid(live_pid)
 
 
 def test_rollback_preserves_registry_for_live_unverified_status(tmp_path, monkeypatch):

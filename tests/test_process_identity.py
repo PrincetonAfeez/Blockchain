@@ -15,6 +15,7 @@ from toychain.process import node_status, start_node, stop_node
 from toychain.process_identity import (
     NodeLifecycle,
     cleanup_stale_node_files,
+    process_is_running,
     read_process_start_token,
     verify_process_identity,
     write_lifecycle,
@@ -274,6 +275,28 @@ def test_verify_process_identity_rejects_missing_executable(tmp_path, monkeypatc
     )
     with pytest.raises(NodeRuntimeError, match="Process identity could not be verified"):
         verify_process_identity(pid, lifecycle, store)
+
+
+def test_process_is_running_treats_proc_zombie_state_as_not_running(monkeypatch) -> None:
+    from pathlib import Path as RealPath
+
+    monkeypatch.setattr("toychain.process_identity.os.name", "posix")
+
+    class _ZombieStatPath:
+        def read_text(self, encoding: str = "ascii") -> str:
+            return "42 (python) Z 0 0 0 0 0 0 0 0"
+
+    def fake_path(value: str | RealPath) -> RealPath | _ZombieStatPath:
+        if str(value) == "/proc/42/stat":
+            return _ZombieStatPath()
+        return RealPath(value)
+
+    monkeypatch.setattr("toychain.process_identity.Path", fake_path)
+    monkeypatch.setattr(
+        "toychain.process_identity.os.kill",
+        lambda _pid, _sig: (_ for _ in ()).throw(AssertionError("kill must not run")),
+    )
+    assert process_is_running(42) is False
 
 
 def test_node_cleanup_stale_cli(tmp_path):
