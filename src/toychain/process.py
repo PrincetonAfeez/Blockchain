@@ -188,13 +188,6 @@ def _resolve_registry_node_path(root: Path, entry: dict[str, Any]) -> Path:
     return candidate
 
 
-def _verify_node_config_data_dir(node_path: Path) -> None:
-    store = DataStore(node_path)
-    if not store.config_path.exists():
-        return
-    load_node_config(store.config_path, expected_data_dir=store.data_dir)
-
-
 def _read_pid(path: Path) -> int | None:
     if not path.exists():
         return None
@@ -202,6 +195,51 @@ def _read_pid(path: Path) -> int | None:
         return int(path.read_text(encoding="ascii").strip())
     except (OSError, ValueError):
         return None
+
+
+@dataclass(frozen=True, slots=True)
+class _RegistryNodeRef:
+    name: str
+    path: Path | None
+    error: str | None = None
+
+
+def _collect_registry_node_refs(root: Path, registry: Path) -> list[_RegistryNodeRef]:
+    data = _read_network_registry(registry)
+    refs: list[_RegistryNodeRef] = []
+    for entry in data["nodes"]:
+        if not isinstance(entry, dict):
+            refs.append(
+                _RegistryNodeRef(
+                    name="unknown",
+                    path=None,
+                    error=f"Malformed local network registry entry: {entry!r}",
+                )
+            )
+            continue
+        name = entry.get("name")
+        name_text = name if isinstance(name, str) else "unknown"
+        try:
+            refs.append(
+                _RegistryNodeRef(
+                    name=name_text,
+                    path=_resolve_registry_node_path(root, entry),
+                )
+            )
+        except NodeRuntimeError as exc:
+            refs.append(
+                _RegistryNodeRef(
+                    name=name_text,
+                    path=None,
+                    error=str(exc),
+                )
+            )
+    return refs
+
+
+def _raw_pid_is_live(node_path: Path) -> tuple[int | None, bool]:
+    pid = _read_pid(DataStore(node_path).pid_path)
+    return pid, pid is not None and process_is_running(pid)
 
 
 def node_status(data_dir: str | Path) -> ProcessStatus:
@@ -754,14 +792,24 @@ def network_status(base_dir: str | Path) -> list[ProcessStatus]:
     registry = root / "local-network.json"
     if not registry.exists():
         return []
-    data = _read_network_registry(registry)
     statuses: list[ProcessStatus] = []
-    for entry in data["nodes"]:
-        if not isinstance(entry, dict):
-            raise NodeRuntimeError("Malformed local network registry entry")
-        node_path = _resolve_registry_node_path(root, entry)
-        _verify_node_config_data_dir(node_path)
-        statuses.append(node_status(node_path))
+    for ref in _collect_registry_node_refs(root, registry):
+        if ref.error is not None or ref.path is None:
+            node_path = ref.path if ref.path is not None else root / ref.name
+            statuses.append(
+                ProcessStatus(
+                    data_dir=str(node_path),
+                    running=False,
+                    pid=_read_pid(DataStore(node_path).pid_path),
+                    port=None,
+                    log_file=str(DataStore(node_path).log_path),
+                    verified=False,
+                    state="malformed",
+                    message=ref.error,
+                )
+            )
+            continue
+        statuses.append(node_status(ref.path))
     return statuses
 
 
@@ -775,31 +823,39 @@ def stop_local_network(base_dir: str | Path) -> list[ProcessStatus]:
     if not registry.exists():
         return []
 
-    registered = network_status(base_dir)
     stop_failures: list[str] = []
+    resolution_failures: list[str] = []
+    resolved_paths: list[Path] = []
 
-    for status in registered:
+    for ref in _collect_registry_node_refs(root, registry):
+        if ref.error is not None or ref.path is None:
+            resolution_failures.append(
+                ref.error or f"Could not resolve registry node {ref.name!r}"
+            )
+            continue
+        resolved_paths.append(ref.path)
         try:
-            stop_node(status.data_dir)
+            stop_node(ref.path)
         except NodeRuntimeError as exc:
-            stop_failures.append(f"{status.data_dir}: {exc}")
+            stop_failures.append(f"{ref.path}: {exc}")
 
-    final_statuses = [node_status(status.data_dir) for status in registered]
-    live_nodes = [
-        f"{status.data_dir}: PID {status.pid} remains live (state={status.state})"
-        for status in final_statuses
-        if status.pid_is_live
-    ]
+    live_nodes: list[str] = []
+    for node_path in resolved_paths:
+        status = node_status(node_path)
+        if status.pid_is_live:
+            live_nodes.append(
+                f"{status.data_dir}: PID {status.pid} remains live (state={status.state})"
+            )
 
-    if stop_failures or live_nodes:
-        issues = stop_failures + live_nodes
+    if resolution_failures or live_nodes:
+        issues = resolution_failures + stop_failures + live_nodes
         raise NodeRuntimeError(
             "Local network shutdown incomplete; registry preserved at "
             f"{registry}. Issues: " + "; ".join(issues)
         )
 
     registry.unlink(missing_ok=True)
-    return final_statuses
+    return [node_status(node_path) for node_path in resolved_paths]
 
 
 def dismiss_local_network_registry(base_dir: str | Path) -> None:
@@ -807,14 +863,23 @@ def dismiss_local_network_registry(base_dir: str | Path) -> None:
     registry = root / "local-network.json"
     if not registry.exists():
         raise NodeRuntimeError("No local network registry to dismiss")
-    live_nodes = [
-        f"{status.data_dir}: PID {status.pid} remains live (state={status.state})"
-        for status in network_status(base_dir)
-        if status.pid_is_live
-    ]
-    if live_nodes:
+
+    resolution_failures: list[str] = []
+    live_nodes: list[str] = []
+    for ref in _collect_registry_node_refs(root, registry):
+        if ref.error is not None or ref.path is None:
+            resolution_failures.append(
+                ref.error or f"Could not resolve registry node {ref.name!r}"
+            )
+            continue
+        pid, is_live = _raw_pid_is_live(ref.path)
+        if is_live:
+            live_nodes.append(f"{ref.path}: PID {pid} remains live")
+
+    if resolution_failures or live_nodes:
+        issues = resolution_failures + live_nodes
         raise NodeRuntimeError(
-            "Refusing to dismiss local network registry while live PIDs remain: "
-            + "; ".join(live_nodes)
+            "Refusing to dismiss local network registry: " + "; ".join(issues)
         )
+
     registry.unlink(missing_ok=True)
