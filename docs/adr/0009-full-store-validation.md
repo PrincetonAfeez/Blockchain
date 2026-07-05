@@ -13,8 +13,8 @@ block could remain on disk while the command returned `"valid": true`.
 
 - `validate-chain` calls `Blockchain.validate_all_blocks()`.
 - Every indexed block is validated independently in parent-before-child order.
-- Each block gets a freshly replayed `ChainState`; stored metadata
-  (`parent_hash`, `height`, `cumulative_work`) is recomputed and compared.
+- Each block gets a freshly replayed `ChainState`; metadata from `chain/index.json`
+  is compared against values recomputed from block headers and transactions.
 - After all blocks pass, fork choice is rerun from recomputed metadata and must
   match the loaded canonical tip; canonical tip state must match cached state.
 - Validation reports include canonical/fork counts and `invalid_block_hash`

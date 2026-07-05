@@ -15,6 +15,8 @@ from toychain.persistence import DataStore
 from toychain.process import run_local_network, start_node, stop_node
 from toychain.process_identity import read_readiness
 
+TEST_INSTANCE_ID = "00000000-0000-4000-8000-000000000099"
+
 
 def test_config_write_failure_leaves_no_pid_or_lock(tmp_path, monkeypatch):
     store = DataStore(tmp_path)
@@ -25,7 +27,7 @@ def test_config_write_failure_leaves_no_pid_or_lock(tmp_path, monkeypatch):
 
     monkeypatch.setattr("toychain.node.save_node_config", fail_config)
     with pytest.raises(PersistenceError, match="simulated config write failure"):
-        run_node_process(tmp_path, port=9000, instance_id="test-instance")
+        run_node_process(tmp_path, port=9000, instance_id=TEST_INSTANCE_ID)
     assert not store.pid_path.exists()
     assert not store.lock_path.exists()
     assert not store.lifecycle_path.exists()
@@ -84,17 +86,65 @@ def test_local_network_second_child_failure_stops_first(tmp_path, monkeypatch):
     assert not first_node.pid_path.exists()
 
 
-def test_readiness_timeout_cleans_up_child(tmp_path, monkeypatch):
+def test_readiness_timeout_terminates_spawned_child(tmp_path, monkeypatch):
     monkeypatch.setattr("toychain.process.read_readiness", lambda _path: None)
     monkeypatch.setattr("toychain.process.time.sleep", lambda _seconds: None)
 
-    with pytest.raises(NodeRuntimeError, match="did not become ready"):
+    with pytest.raises(
+        NodeRuntimeError,
+        match="(did not become ready|still alive)",
+    ):
         start_node(tmp_path, port=9930)
 
     store = DataStore(tmp_path)
     assert not store.pid_path.exists()
     assert not store.lock_path.exists()
     assert not store.ready_path.exists()
+
+
+def test_malformed_readiness_json_terminates_spawned_child(tmp_path, monkeypatch):
+    def broken_readiness(path):
+        if path.exists():
+            raise PersistenceError("malformed readiness")
+        return None
+
+    monkeypatch.setattr("toychain.process.read_readiness", broken_readiness)
+    monkeypatch.setattr("toychain.process.time.sleep", lambda _seconds: None)
+
+    with pytest.raises(
+        NodeRuntimeError,
+        match="(did not become ready|still alive)",
+    ):
+        start_node(tmp_path, port=9931)
+
+    store = DataStore(tmp_path)
+    assert not store.pid_path.exists()
+    assert not store.lock_path.exists()
+
+
+def test_malformed_config_during_readiness_terminates_child(tmp_path, monkeypatch):
+    original_load = __import__(
+        "toychain.node_config", fromlist=["load_node_config"]
+    ).load_node_config
+    calls = {"count": 0}
+
+    def flaky_load(path, *, expected_data_dir=None):
+        calls["count"] += 1
+        if calls["count"] > 1:
+            raise PersistenceError("simulated malformed config during readiness")
+        return original_load(path, expected_data_dir=expected_data_dir)
+
+    monkeypatch.setattr("toychain.process.load_node_config", flaky_load)
+
+    with pytest.raises(
+        NodeRuntimeError,
+        match="(did not become ready|malformed config|still alive)",
+    ):
+        start_node(tmp_path, port=9932)
+
+    store = DataStore(tmp_path)
+    assert not store.pid_path.exists()
+    assert not store.lock_path.exists()
 
 
 def test_successful_local_network_creates_atomic_registry(tmp_path):

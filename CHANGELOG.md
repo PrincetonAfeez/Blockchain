@@ -19,6 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Node and local-network startup are failure-atomic: partial startup removes
   lifecycle files, and local-network registry writes happen only after all nodes
   are ready.
+- `node cleanup-stale` removes lifecycle files only when the node is not running;
+  verified live nodes are never cleaned (`--dangerous` is for live unverified PIDs).
+- Process identity verification is fail-closed: executable, command line,
+  `process_start_token`, and `--instance-id` must match before stop signals.
+- `config.json`, `node.lifecycle.json`, and `node.ready.json` are validated on
+  read and write; CLI port arguments enforce the 0–65535 range before startup.
+- `validate-chain` compares recomputed metadata against persisted
+  `chain/index.json` records.
+- `node status` reports verified lifecycle state (`running_verified`,
+  `live_unverified`, `stale`, `malformed`).
 
 ### Fixed
 

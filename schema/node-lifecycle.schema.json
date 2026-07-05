@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://toychain.local/schema/node-lifecycle.schema.json",
+  "title": "Toychain node lifecycle identity",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "pid",
+    "instance_id",
+    "started_at",
+    "process_start_token",
+    "data_dir",
+    "executable"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "pid": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "instance_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "started_at": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "process_start_token": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "data_dir": {
+      "type": "string",
+      "minLength": 1
+    },
+    "executable": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

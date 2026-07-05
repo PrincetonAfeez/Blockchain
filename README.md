@@ -178,7 +178,7 @@ node1/
   config.json          # schema_version 1; validated node config
   node.pid
   node.lock        # held by a running node process
-  node.lifecycle.json  # pid/instance identity written by the running node
+  node.lifecycle.json  # pid/instance/process_start_token identity record
   node.ready.json      # readiness record written after successful startup
   node.writelock   # short-lived; serializes one-off state-changing CLI commands
   node.log

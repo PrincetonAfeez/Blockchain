@@ -28,6 +28,7 @@ def _inject_fork_block(chain: Blockchain, block: Block) -> str:
     chain.children.setdefault(parent_hash, set()).add(block_hash)
     chain.children.setdefault(block_hash, set())
     chain._states[block_hash] = chain._states[parent_hash].copy()
+    chain.index_metadata[block_hash] = chain.metadata[block_hash]
     return block_hash
 
 
@@ -175,7 +176,7 @@ def test_validate_all_blocks_rejects_incorrect_metadata(alice):
     chain = Blockchain()
     fork = _valid_fork_at_genesis(chain, alice)
     fork_hash = _inject_fork_block(chain, fork)
-    chain.metadata[fork_hash] = BlockMetadata(
+    chain.index_metadata[fork_hash] = BlockMetadata(
         parent_hash=chain.genesis_hash,
         height=99,
         cumulative_work=chain.metadata[fork_hash].cumulative_work,

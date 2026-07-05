@@ -14,3 +14,4 @@ them. Each record is self-contained: Context, Decision, Consequences.
 - [0009 — Full-store validation for validate-chain](0009-full-store-validation.md)
 - [0010 — Node lifecycle identity before stop signals](0010-node-lifecycle-identity.md)
 - [0011 — Failure-atomic node and local-network startup](0011-failure-atomic-startup.md)
+- [0012 — Fail-closed node process identity verification](0012-fail-closed-process-identity.md)

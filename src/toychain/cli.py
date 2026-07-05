@@ -15,6 +15,7 @@ from .errors import MempoolError, ToychainError, ValidationError
 from .merkle import create_merkle_proof, verify_merkle_proof
 from .models import MerkleProof, Transaction
 from .node import Node, run_node_process
+from .node_config import valid_port_arg
 from .persistence import read_json, write_json
 from .process import (
     cleanup_stale_node_files,
@@ -170,12 +171,21 @@ def _add_global_parser() -> argparse.ArgumentParser:
     node = sub.add_parser("node", help="run a local node process")
     node_sub = node.add_subparsers(dest="node_command", required=True, metavar="<action>")
     node_start = node_sub.add_parser("start", help="start a background node process")
-    node_start.add_argument("--port", type=int, default=0, help="advisory port for the node")
+    node_start.add_argument(
+        "--port",
+        type=valid_port_arg,
+        default=0,
+        help="advisory port for the node, 0–65535 (default: 0)",
+    )
     node_sub.add_parser("stop", help="stop the running node process")
     node_sub.add_parser("status", help="report whether the node is running")
     cleanup = node_sub.add_parser(
         "cleanup-stale",
-        help="remove stale pid/lock/stop/lifecycle files when the node is not running",
+        help=(
+            "remove stale pid/lock/stop/lifecycle files when the node is not running; "
+            "dead PID files are cleaned automatically; live verified nodes are never "
+            "cleaned; live unverified PIDs require --dangerous"
+        ),
     )
     cleanup.add_argument(
         "--dangerous",
@@ -187,7 +197,12 @@ def _add_global_parser() -> argparse.ArgumentParser:
     network_sub = network.add_subparsers(dest="network_command", required=True, metavar="<action>")
     run_local = network_sub.add_parser("run-local", help="start N isolated local nodes")
     run_local.add_argument("--nodes", type=int, default=3, help="number of nodes (default: 3)")
-    run_local.add_argument("--base-port", type=int, default=9001, help="first port (default: 9001)")
+    run_local.add_argument(
+        "--base-port",
+        type=valid_port_arg,
+        default=9001,
+        help="first advisory port; all generated ports must remain within 0–65535 (default: 9001)",
+    )
     network_sub.add_parser("stop-local", help="stop every node in the local network")
     network_sub.add_parser("status", help="report the status of every local node")
 
@@ -209,9 +224,9 @@ def _add_global_parser() -> argparse.ArgumentParser:
     internal = sub.add_parser("_node-run")
     internal.add_argument(
         "--port",
-        type=int,
+        type=valid_port_arg,
         default=0,
-        help="advisory port for the internal node process",
+        help="advisory port for the internal node process, 0–65535",
     )
     internal.add_argument(
         "--instance-id",

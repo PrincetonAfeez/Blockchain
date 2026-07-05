@@ -17,6 +17,8 @@ export, and persistence. Binary consensus records remain defined by
 | Mempool | [`mempool.schema.json`](mempool.schema.json) | `mempool/transactions.json` |
 | Local network | [`local-network.schema.json`](local-network.schema.json) | `local-network.json` registry (`name` + advisory `port` only) |
 | Node config | [`node-config.schema.json`](node-config.schema.json) | `config.json` in each node data directory |
+| Node lifecycle | [`node-lifecycle.schema.json`](node-lifecycle.schema.json) | `node.lifecycle.json` identity record |
+| Node readiness | [`node-readiness.schema.json`](node-readiness.schema.json) | `node.ready.json` readiness record |
 
 Versioning:
 

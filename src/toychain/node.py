@@ -17,7 +17,7 @@ from .crypto import generate_keypair
 from .errors import NodeRuntimeError, PersistenceError
 from .mempool import Mempool, MempoolRepairReport
 from .models import Block, Transaction
-from .node_config import NodeConfig, save_node_config
+from .node_config import NodeConfig, save_node_config, validate_port_value
 from .persistence import DataStore, Wallet
 from .process import process_is_running
 from .process_identity import (
@@ -25,6 +25,7 @@ from .process_identity import (
     NodeReadiness,
     cleanup_startup_files,
     new_instance_id,
+    read_process_start_token,
     write_lifecycle,
     write_readiness,
 )
@@ -248,6 +249,7 @@ def run_node_process(
     *,
     instance_id: str | None = None,
 ) -> int:
+    validate_port_value(port)
     store = DataStore(data_dir)
     store.initialize()
     if store.lock_path.exists():
@@ -284,6 +286,7 @@ def run_node_process(
             pid=os.getpid(),
             instance_id=resolved_instance_id,
             started_at=int(time.time()),
+            process_start_token=read_process_start_token(),
             data_dir=str(store.data_dir),
             executable=os.path.normcase(str(Path(sys.executable).resolve())),
         )

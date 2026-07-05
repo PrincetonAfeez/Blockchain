@@ -14,6 +14,7 @@ from .constants import (
 )
 from .consensus import ChainScore, lowest_common_ancestor, select_best_chain
 from .errors import ConsensusError, ValidationError
+from .json_validation import strict_int, strict_str
 from .merkle import build_merkle_root
 from .models import Block
 from .transactions import (
@@ -37,6 +38,19 @@ class BlockMetadata:
             "height": self.height,
             "cumulative_work": self.cumulative_work,
         }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "BlockMetadata":
+        parent_raw = data.get("parent_hash")
+        if parent_raw is None:
+            parent_hash = None
+        else:
+            parent_hash = strict_str(parent_raw, "parent_hash")
+        return cls(
+            parent_hash=parent_hash,
+            height=strict_int(data["height"], "height"),
+            cumulative_work=strict_int(data["cumulative_work"], "cumulative_work"),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,6 +178,12 @@ class Blockchain:
         self.children: dict[str, set[str]] = {GENESIS_BLOCK.hash: set()}
         self._states: dict[str, ChainState] = {GENESIS_BLOCK.hash: genesis_state}
         self.tip_hash = GENESIS_BLOCK.hash
+        self.index_metadata: dict[str, BlockMetadata] = {}
+
+    def _persisted_metadata(self, block_hash: str) -> BlockMetadata:
+        if block_hash in self.index_metadata:
+            return self.index_metadata[block_hash]
+        return self.metadata[block_hash]
 
     @property
     def genesis_hash(self) -> str:
@@ -293,7 +313,10 @@ class Blockchain:
         canonical_hashes = set(self.canonical_hashes())
         ordered_hashes = sorted(
             self.metadata,
-            key=lambda block_hash: (self.metadata[block_hash].height, block_hash),
+            key=lambda block_hash: (
+                self._persisted_metadata(block_hash).height,
+                block_hash,
+            ),
         )
         steps: list[str] = []
         checked = 0
@@ -304,7 +327,7 @@ class Blockchain:
 
         for block_hash in ordered_hashes:
             block = self.blocks[block_hash]
-            stored_metadata = self.metadata[block_hash]
+            persisted_metadata = self._persisted_metadata(block_hash)
             on_canonical = block_hash in canonical_hashes
             branch = "canonical" if on_canonical else "fork"
             try:
@@ -321,8 +344,11 @@ class Blockchain:
                         raise ValidationError(
                             f"Block parent is unknown or out of order: {parent_hash}"
                         )
-                    if stored_metadata.parent_hash != parent_hash:
-                        raise ValidationError("Stored parent_hash does not match block header")
+                    if persisted_metadata.parent_hash != parent_hash:
+                        raise ValidationError(
+                            f"Persisted metadata parent_hash for {block_hash} is "
+                            f"{persisted_metadata.parent_hash!r}, expected {parent_hash!r}"
+                        )
                     parent = self.blocks[parent_hash]
                     parent_metadata = recomputed_metadata[parent_hash]
                     height = parent_metadata.height + 1
@@ -339,9 +365,17 @@ class Blockchain:
                         cumulative_work=parent_metadata.cumulative_work + block_work(block),
                     )
 
-                if stored_metadata != expected_metadata:
+                if persisted_metadata != expected_metadata:
+                    for field_name in ("parent_hash", "height", "cumulative_work"):
+                        stored_value = getattr(persisted_metadata, field_name)
+                        expected_value = getattr(expected_metadata, field_name)
+                        if stored_value != expected_value:
+                            raise ValidationError(
+                                f"Persisted metadata {field_name} for {block_hash} is "
+                                f"{stored_value!r}, expected {expected_value!r}"
+                            )
                     raise ValidationError(
-                        "Stored block metadata does not match recomputed metadata"
+                        "Persisted block metadata does not match recomputed metadata"
                     )
 
                 recomputed_states[block_hash] = state
@@ -356,8 +390,9 @@ class Blockchain:
                     f"({len(block.transactions)} tx)"
                 )
             except ValidationError as exc:
+                display_height = persisted_metadata.height
                 steps.append(
-                    f"height {stored_metadata.height} {block_hash[:12]} {branch} FAILED: {exc}"
+                    f"height {display_height} {block_hash[:12]} {branch} FAILED: {exc}"
                 )
                 return ValidationReport(
                     valid=False,
@@ -485,8 +520,11 @@ class Blockchain:
         tip_hash: str | None = None,
         *,
         validate: bool = True,
+        index_metadata: dict[str, BlockMetadata] | None = None,
     ) -> "Blockchain":
         chain = cls()
+        if index_metadata is not None:
+            chain.index_metadata = dict(index_metadata)
         pending = {
             block.hash: block
             for block in blocks

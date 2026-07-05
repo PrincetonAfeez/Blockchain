@@ -10,8 +10,39 @@ from pathlib import Path
 from typing import Any
 
 from .constants import LIFECYCLE_SCHEMA_VERSION, READINESS_SCHEMA_VERSION
-from .errors import NodeRuntimeError, PersistenceError
+from .errors import CodecError, NodeRuntimeError, PersistenceError
+from .json_validation import (
+    persistence_schema_version,
+    reject_unknown_keys,
+    strict_int,
+    strict_str,
+    validate_json_schema,
+)
 from .persistence import DataStore, read_json, write_json
+
+_LIFECYCLE_KEYS = frozenset(
+    {
+        "schema_version",
+        "pid",
+        "instance_id",
+        "started_at",
+        "process_start_token",
+        "data_dir",
+        "executable",
+    }
+)
+
+
+_READINESS_KEYS = frozenset(
+    {
+        "schema_version",
+        "instance_id",
+        "pid",
+        "data_dir",
+        "port",
+        "ready_at",
+    }
+)
 
 
 def _normalized_path(path: str | Path) -> str:
@@ -43,6 +74,7 @@ class NodeLifecycle:
     pid: int
     instance_id: str
     started_at: int
+    process_start_token: int
     data_dir: str
     executable: str
 
@@ -52,6 +84,7 @@ class NodeLifecycle:
             "pid": self.pid,
             "instance_id": self.instance_id,
             "started_at": self.started_at,
+            "process_start_token": self.process_start_token,
             "data_dir": self.data_dir,
             "executable": self.executable,
         }
@@ -59,15 +92,27 @@ class NodeLifecycle:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "NodeLifecycle":
         try:
+            validate_json_schema(data, "node-lifecycle")
+            reject_unknown_keys(data, _LIFECYCLE_KEYS, "node lifecycle")
+            persistence_schema_version(data["schema_version"])
+            data_dir = strict_str(data["data_dir"], "data_dir")
+            executable = strict_str(data["executable"], "executable")
+            if not data_dir.strip():
+                raise CodecError("data_dir must not be empty")
+            if not executable.strip():
+                raise CodecError("executable must not be empty")
             return cls(
-                schema_version=int(data["schema_version"]),
-                pid=int(data["pid"]),
-                instance_id=str(data["instance_id"]),
-                started_at=int(data["started_at"]),
-                data_dir=str(data["data_dir"]),
-                executable=str(data["executable"]),
+                schema_version=strict_int(data["schema_version"], "schema_version"),
+                pid=strict_int(data["pid"], "pid"),
+                instance_id=strict_str(data["instance_id"], "instance_id"),
+                started_at=strict_int(data["started_at"], "started_at"),
+                process_start_token=strict_int(
+                    data["process_start_token"], "process_start_token"
+                ),
+                data_dir=data_dir,
+                executable=executable,
             )
-        except (KeyError, TypeError, ValueError) as exc:
+        except (KeyError, TypeError, ValueError, CodecError) as exc:
             raise PersistenceError("Malformed node lifecycle file") from exc
 
 
@@ -78,7 +123,10 @@ def new_instance_id() -> str:
 
 
 def write_lifecycle(path: Path, lifecycle: NodeLifecycle) -> None:
-    write_json(path, lifecycle.to_dict())
+    payload = lifecycle.to_dict()
+    validate_json_schema(payload, "node-lifecycle")
+    reject_unknown_keys(payload, _LIFECYCLE_KEYS, "node lifecycle")
+    write_json(path, payload)
 
 
 def read_lifecycle(path: Path) -> NodeLifecycle | None:
@@ -117,20 +165,29 @@ class NodeReadiness:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "NodeReadiness":
         try:
+            validate_json_schema(data, "node-readiness")
+            reject_unknown_keys(data, _READINESS_KEYS, "node readiness")
+            persistence_schema_version(data["schema_version"])
+            data_dir = strict_str(data["data_dir"], "data_dir")
+            if not data_dir.strip():
+                raise CodecError("data_dir must not be empty")
             return cls(
-                schema_version=int(data["schema_version"]),
-                instance_id=str(data["instance_id"]),
-                pid=int(data["pid"]),
-                data_dir=str(data["data_dir"]),
-                port=int(data["port"]),
-                ready_at=int(data["ready_at"]),
+                schema_version=strict_int(data["schema_version"], "schema_version"),
+                instance_id=strict_str(data["instance_id"], "instance_id"),
+                pid=strict_int(data["pid"], "pid"),
+                data_dir=data_dir,
+                port=strict_int(data["port"], "port"),
+                ready_at=strict_int(data["ready_at"], "ready_at"),
             )
-        except (KeyError, TypeError, ValueError) as exc:
+        except (KeyError, TypeError, ValueError, CodecError) as exc:
             raise PersistenceError("Malformed node readiness file") from exc
 
 
 def write_readiness(path: Path, readiness: NodeReadiness) -> None:
-    write_json(path, readiness.to_dict())
+    payload = readiness.to_dict()
+    validate_json_schema(payload, "node-readiness")
+    reject_unknown_keys(payload, _READINESS_KEYS, "node readiness")
+    write_json(path, payload)
 
 
 def read_readiness(path: Path) -> NodeReadiness | None:
@@ -148,14 +205,41 @@ def read_readiness(path: Path) -> NodeReadiness | None:
 
 
 def cleanup_startup_files(store: DataStore, paths: tuple[Path, ...]) -> None:
+    pid = _read_pid_file(store.pid_path)
+    if pid is not None and process_is_running(pid):
+        raise NodeRuntimeError(
+            f"Refusing to remove lifecycle files while PID {pid} is still alive"
+        )
     for path in reversed(paths):
         path.unlink(missing_ok=True)
     store.config_path.with_suffix(store.config_path.suffix + ".tmp").unlink(missing_ok=True)
     store.ready_path.unlink(missing_ok=True)
 
 
+def _read_pid_file(path: Path) -> int | None:
+    if not path.exists():
+        return None
+    try:
+        return int(path.read_text(encoding="ascii").strip())
+    except (OSError, ValueError):
+        return None
+
+
 def _normalized_executable(path: str) -> str:
-    return os.path.normcase(str(Path(path).expanduser().resolve()))
+    return os.path.normcase(os.path.realpath(path))
+
+
+def read_process_start_token(pid: int | None = None) -> int:
+    target = os.getpid() if pid is None else pid
+    if os.name == "nt":
+        _executable, token = _windows_process_info(target)
+    else:
+        token = _linux_process_start_time(target)
+    if token is None:
+        raise NodeRuntimeError(
+            f"Could not read process start token for PID {target}"
+        )
+    return token
 
 
 def _linux_process_start_time(pid: int) -> int | None:
@@ -163,7 +247,6 @@ def _linux_process_start_time(pid: int) -> int | None:
         stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
     except OSError:
         return None
-    # comm may contain spaces inside parentheses; start time is field 22 (1-indexed).
     close_paren = stat.rfind(")")
     if close_paren == -1:
         return None
@@ -173,6 +256,13 @@ def _linux_process_start_time(pid: int) -> int | None:
     try:
         return int(fields[19])
     except ValueError:
+        return None
+
+
+def _linux_executable(pid: int) -> str | None:
+    try:
+        return os.readlink(f"/proc/{pid}/exe")
+    except OSError:
         return None
 
 
@@ -187,7 +277,6 @@ def _linux_command_line(pid: int) -> str | None:
 
 
 def _windows_process_info(pid: int) -> tuple[str | None, int | None]:
-    import ctypes
     from ctypes import wintypes
 
     process_query_limited_information = 0x1000
@@ -214,9 +303,8 @@ def _windows_process_info(pid: int) -> tuple[str | None, int | None]:
 
         image = ctypes.create_unicode_buffer(32768)
         size = wintypes.DWORD(len(image))
-        query_full = 0x1000
         if ctypes.windll.kernel32.QueryFullProcessImageNameW(
-            handle, query_full, image, ctypes.byref(size)
+            handle, 0, image, ctypes.byref(size)
         ):
             executable = image.value
         else:
@@ -250,6 +338,32 @@ def _windows_command_line(pid: int) -> str | None:
     return command_line or None
 
 
+def _identity_refusal(pid: int) -> NodeRuntimeError:
+    return NodeRuntimeError(
+        f"Process identity could not be verified; refusing to signal PID {pid}"
+    )
+
+
+def _command_line_has_instance_id(command_line: str, instance_id: str) -> bool:
+    return (
+        f"--instance-id {instance_id}" in command_line
+        or f"--instance-id={instance_id}" in command_line
+    )
+
+
+def _verify_command_line(command_line: str, lifecycle: NodeLifecycle, store: DataStore) -> None:
+    lowered = command_line.lower()
+    if "toychain" not in lowered and "python" not in lowered:
+        raise NodeRuntimeError("Process command line is not a Toychain node")
+    if "_node-run" not in command_line:
+        raise NodeRuntimeError("Process command line is not a Toychain node")
+    data_dir = str(store.data_dir)
+    if data_dir not in command_line and str(store.data_dir) not in command_line:
+        raise NodeRuntimeError("Process command line does not reference this data directory")
+    if not _command_line_has_instance_id(command_line, lifecycle.instance_id):
+        raise NodeRuntimeError("Process command line does not match lifecycle instance_id")
+
+
 def verify_process_identity(
     pid: int,
     lifecycle: NodeLifecycle,
@@ -261,32 +375,30 @@ def verify_process_identity(
         raise NodeRuntimeError("Lifecycle data_dir does not match this data directory")
 
     if os.name == "nt":
-        executable, _created_at = _windows_process_info(pid)
+        executable, process_start_token = _windows_process_info(pid)
         command_line = _windows_command_line(pid)
     else:
-        executable = None
+        executable = _linux_executable(pid)
         command_line = _linux_command_line(pid)
-        _linux_process_start_time(pid)
+        process_start_token = _linux_process_start_time(pid)
 
-    if executable is not None:
-        if _normalized_executable(executable) != _normalized_executable(lifecycle.executable):
-            raise NodeRuntimeError("Process executable does not match lifecycle record")
+    if executable is None:
+        raise _identity_refusal(pid)
+    if _normalized_executable(executable) != _normalized_executable(lifecycle.executable):
+        raise NodeRuntimeError("Process executable does not match lifecycle record")
 
-    if command_line is not None:
-        data_dir = str(store.data_dir)
-        if "toychain" not in command_line or "_node-run" not in command_line:
-            raise NodeRuntimeError("Process command line is not a Toychain node")
-        if data_dir not in command_line and str(store.data_dir) not in command_line:
-            raise NodeRuntimeError("Process command line does not reference this data directory")
+    if command_line is None:
+        raise _identity_refusal(pid)
+    _verify_command_line(command_line, lifecycle, store)
+
+    if process_start_token is None:
+        raise _identity_refusal(pid)
+    if process_start_token != lifecycle.process_start_token:
+        raise NodeRuntimeError("Process start token does not match lifecycle record")
 
 
 def cleanup_stale_node_files(store: DataStore, *, force: bool = False) -> None:
-    pid: int | None = None
-    if store.pid_path.exists():
-        try:
-            pid = int(store.pid_path.read_text(encoding="ascii").strip())
-        except (OSError, ValueError):
-            pid = None
+    pid = _read_pid_file(store.pid_path)
     if pid is not None and process_is_running(pid):
         lifecycle = read_lifecycle(store.lifecycle_path)
         if lifecycle is not None:
@@ -297,6 +409,10 @@ def cleanup_stale_node_files(store: DataStore, *, force: bool = False) -> None:
                     raise NodeRuntimeError(
                         f"Refusing to clean stale files while PID {pid} is alive but unverified"
                     ) from None
+            else:
+                raise NodeRuntimeError(
+                    f"Refusing to clean lifecycle files for active Toychain node PID {pid}"
+                )
         elif not force:
             raise NodeRuntimeError(
                 f"Refusing to clean stale files while PID {pid} is alive without lifecycle identity"
@@ -305,5 +421,4 @@ def cleanup_stale_node_files(store: DataStore, *, force: bool = False) -> None:
     store.lock_path.unlink(missing_ok=True)
     store.stop_path.unlink(missing_ok=True)
     store.lifecycle_path.unlink(missing_ok=True)
-    store.ready_path.unlink(missing_ok=True)
     store.ready_path.unlink(missing_ok=True)

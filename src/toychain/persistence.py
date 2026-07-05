@@ -16,7 +16,7 @@ from .json_validation import (
     strict_str,
     validate_json_schema,
 )
-from .chain import Blockchain
+from .chain import Blockchain, BlockMetadata
 from .crypto import KeyPair, address_from_public_key, public_key_from_private
 from .errors import CodecError, ConsensusError, PersistenceError
 from .mempool import Mempool
@@ -203,12 +203,22 @@ class DataStore:
         except CodecError as exc:
             raise PersistenceError(str(exc)) from exc
         blocks: list[Block] = []
+        index_metadata: dict[str, BlockMetadata] = {}
         try:
-            for block_hash in index["blocks"]:
-                # Reject anything that is not a hex hash before building a path,
-                # so a tampered index cannot traverse outside blocks/ on read.
+            for block_hash, meta in index["blocks"].items():
                 if not _is_block_hash(block_hash):
                     raise PersistenceError(f"Invalid block hash in index: {block_hash!r}")
+                if not isinstance(meta, dict):
+                    raise PersistenceError(
+                        f"Malformed metadata for block {block_hash} in chain index"
+                    )
+                try:
+                    index_metadata[block_hash] = BlockMetadata.from_dict(meta)
+                except (CodecError, KeyError, TypeError) as exc:
+                    raise PersistenceError(
+                        f"Malformed metadata for block {block_hash} in chain index"
+                    ) from exc
+            for block_hash in index["blocks"]:
                 data = read_json(self.blocks_dir / f"{block_hash}.json")
                 if not isinstance(data, dict):
                     raise PersistenceError(f"Block {block_hash} is not a JSON object")
@@ -216,13 +226,11 @@ class DataStore:
                 if block.hash != block_hash:
                     raise PersistenceError(f"Block filename/hash mismatch: {block_hash}")
                 blocks.append(block)
-            # The canonical tip is derived from the validated block set by
-            # deterministic fork choice; index.json's canonical_tip and
-            # canonical_tip.txt are human-readable mirrors, not trusted inputs
-            # (avoiding a read-during-flush race). Trusting the node's own
-            # persisted store keeps loads cheap; validate-chain re-verifies the
-            # whole chain from genesis.
-            return Blockchain.from_blocks(blocks, validate=False)
+            return Blockchain.from_blocks(
+                blocks,
+                index_metadata=index_metadata,
+                validate=False,
+            )
         except (CodecError, ConsensusError, KeyError) as exc:
             raise PersistenceError(f"Could not load chain: {exc}") from exc
 
