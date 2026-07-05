@@ -72,6 +72,9 @@ class ValidationReport:
     checked_blocks: int
     tip_hash: str
     message: str
+    checked_canonical_blocks: int = 0
+    checked_fork_blocks: int = 0
+    invalid_block_hash: str | None = None
     steps: tuple[str, ...] = ()
 
 
@@ -284,45 +287,152 @@ class Blockchain:
         return tuple(self.blocks[block_hash] for block_hash in self.canonical_hashes())
 
     def validate_canonical_chain(self, *, explain: bool = False) -> ValidationReport:
-        hashes = self.canonical_hashes()
+        return self.validate_all_blocks(explain=explain)
+
+    def validate_all_blocks(self, *, explain: bool = False) -> ValidationReport:
+        canonical_hashes = set(self.canonical_hashes())
+        ordered_hashes = sorted(
+            self.metadata,
+            key=lambda block_hash: (self.metadata[block_hash].height, block_hash),
+        )
         steps: list[str] = []
         checked = 0
-        try:
-            state = validate_genesis(self.blocks[hashes[0]])
-            checked = 1
-            steps.append(f"height 0 {hashes[0][:12]} genesis ok")
-            for height, block_hash in enumerate(hashes[1:], start=1):
-                block = self.blocks[block_hash]
-                parent = self.blocks[hashes[height - 1]]
-                state = validate_block(
-                    block,
-                    parent=parent,
-                    parent_state=state,
-                    height=height,
-                )
+        checked_canonical = 0
+        checked_fork = 0
+        recomputed_states: dict[str, ChainState] = {}
+        recomputed_metadata: dict[str, BlockMetadata] = {}
+
+        for block_hash in ordered_hashes:
+            block = self.blocks[block_hash]
+            stored_metadata = self.metadata[block_hash]
+            on_canonical = block_hash in canonical_hashes
+            branch = "canonical" if on_canonical else "fork"
+            try:
+                parent_hash = block.header.previous_hash.hex()
+                if block_hash == self.genesis_hash:
+                    state = validate_genesis(block)
+                    expected_metadata = BlockMetadata(
+                        parent_hash=None,
+                        height=0,
+                        cumulative_work=block_work(block),
+                    )
+                else:
+                    if parent_hash not in recomputed_states:
+                        raise ValidationError(
+                            f"Block parent is unknown or out of order: {parent_hash}"
+                        )
+                    if stored_metadata.parent_hash != parent_hash:
+                        raise ValidationError("Stored parent_hash does not match block header")
+                    parent = self.blocks[parent_hash]
+                    parent_metadata = recomputed_metadata[parent_hash]
+                    height = parent_metadata.height + 1
+                    state = validate_block(
+                        block,
+                        parent=parent,
+                        parent_state=recomputed_states[parent_hash],
+                        height=height,
+                        now=None,
+                    )
+                    expected_metadata = BlockMetadata(
+                        parent_hash=parent_hash,
+                        height=height,
+                        cumulative_work=parent_metadata.cumulative_work + block_work(block),
+                    )
+
+                if stored_metadata != expected_metadata:
+                    raise ValidationError(
+                        "Stored block metadata does not match recomputed metadata"
+                    )
+
+                recomputed_states[block_hash] = state
+                recomputed_metadata[block_hash] = expected_metadata
                 checked += 1
+                if on_canonical:
+                    checked_canonical += 1
+                else:
+                    checked_fork += 1
                 steps.append(
-                    f"height {height} {block_hash[:12]} ok "
+                    f"height {expected_metadata.height} {block_hash[:12]} {branch} ok "
                     f"({len(block.transactions)} tx)"
                 )
-            if state.balances != self._states[self.tip_hash].balances:
-                raise ValidationError("Replayed balances differ from cached balances")
-            if state.nonces != self._states[self.tip_hash].nonces:
-                raise ValidationError("Replayed nonces differ from cached nonces")
-        except ValidationError as exc:
-            steps.append(f"height {checked} FAILED: {exc}")
+            except ValidationError as exc:
+                steps.append(
+                    f"height {stored_metadata.height} {block_hash[:12]} {branch} FAILED: {exc}"
+                )
+                return ValidationReport(
+                    valid=False,
+                    checked_blocks=checked,
+                    checked_canonical_blocks=checked_canonical,
+                    checked_fork_blocks=checked_fork,
+                    tip_hash=self.tip_hash,
+                    message=str(exc),
+                    invalid_block_hash=block_hash,
+                    steps=tuple(steps) if explain else (),
+                )
+
+        derived_tip = select_best_chain(
+            {
+                block_hash: ChainScore(
+                    cumulative_work=metadata.cumulative_work,
+                    block_hash=block_hash,
+                )
+                for block_hash, metadata in recomputed_metadata.items()
+            }
+        )
+        if derived_tip != self.tip_hash:
+            message = (
+                f"Derived best tip {derived_tip} does not match loaded tip {self.tip_hash}"
+            )
+            steps.append(message)
             return ValidationReport(
                 valid=False,
                 checked_blocks=checked,
+                checked_canonical_blocks=checked_canonical,
+                checked_fork_blocks=checked_fork,
                 tip_hash=self.tip_hash,
-                message=str(exc),
+                message=message,
+                invalid_block_hash=None,
                 steps=tuple(steps) if explain else (),
             )
+
+        canonical_state = recomputed_states[self.tip_hash]
+        if canonical_state.balances != self._states[self.tip_hash].balances:
+            message = "Replayed canonical balances differ from cached balances"
+            steps.append(message)
+            return ValidationReport(
+                valid=False,
+                checked_blocks=checked,
+                checked_canonical_blocks=checked_canonical,
+                checked_fork_blocks=checked_fork,
+                tip_hash=self.tip_hash,
+                message=message,
+                invalid_block_hash=self.tip_hash,
+                steps=tuple(steps) if explain else (),
+            )
+        if canonical_state.nonces != self._states[self.tip_hash].nonces:
+            message = "Replayed canonical nonces differ from cached nonces"
+            steps.append(message)
+            return ValidationReport(
+                valid=False,
+                checked_blocks=checked,
+                checked_canonical_blocks=checked_canonical,
+                checked_fork_blocks=checked_fork,
+                tip_hash=self.tip_hash,
+                message=message,
+                invalid_block_hash=self.tip_hash,
+                steps=tuple(steps) if explain else (),
+            )
+
         return ValidationReport(
             valid=True,
-            checked_blocks=len(hashes),
+            checked_blocks=checked,
+            checked_canonical_blocks=checked_canonical,
+            checked_fork_blocks=checked_fork,
             tip_hash=self.tip_hash,
-            message=f"Canonical chain is valid through height {len(hashes) - 1}",
+            message=(
+                f"All stored blocks are valid "
+                f"({checked_canonical} canonical, {checked_fork} fork)"
+            ),
             steps=tuple(steps) if explain else (),
         )
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "toychain-capstone"
-version = "1.0.0"
+version = "2.0.0"
 description = "Educational CLI blockchain with canonical bytes, Ed25519, Merkle proofs, PoW, forks, and local node processes"
 readme = "README.md"
 requires-python = ">=3.11"

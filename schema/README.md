@@ -16,6 +16,7 @@ export, and persistence. Binary consensus records remain defined by
 | Chain index | [`chain-index.schema.json`](chain-index.schema.json) | `chain/index.json` metadata |
 | Mempool | [`mempool.schema.json`](mempool.schema.json) | `mempool/transactions.json` |
 | Local network | [`local-network.schema.json`](local-network.schema.json) | `local-network.json` registry (`name` + advisory `port` only) |
+| Node config | [`node-config.schema.json`](node-config.schema.json) | `config.json` in each node data directory |
 
 Versioning:
 

@@ -305,12 +305,12 @@ def test_chain_replay_ignores_wall_clock(alice):
 def test_validate_chain_explain_emits_trace(alice):
     chain = Blockchain()
     chain.add_block(mined_on(chain, chain.tip_hash, alice.address))
-    report = chain.validate_canonical_chain(explain=True)
+    report = chain.validate_all_blocks(explain=True)
     assert report.valid
-    assert any("genesis" in step for step in report.steps)
+    assert any("height 0" in step for step in report.steps)
     assert len(report.steps) == report.checked_blocks
     # The trace is opt-in: it must not leak when --explain is not requested.
-    assert chain.validate_canonical_chain().steps == ()
+    assert chain.validate_all_blocks().steps == ()
 
 
 def test_true_double_spend_same_nonce_is_rejected(alice, bob):

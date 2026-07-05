@@ -138,6 +138,8 @@ class DataStore:
         self.lock_path = self.data_dir / "node.lock"
         self.writelock_path = self.data_dir / "node.writelock"
         self.stop_path = self.data_dir / "node.stop"
+        self.lifecycle_path = self.data_dir / "node.lifecycle.json"
+        self.ready_path = self.data_dir / "node.ready.json"
         self.log_path = self.data_dir / "node.log"
 
     def initialize(self) -> None:

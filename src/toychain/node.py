@@ -5,19 +5,29 @@ from __future__ import annotations
 import atexit
 import os
 import signal
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
 from .block import MiningStats, make_block_candidate, mine_block
 from .chain import AddBlockResult, Blockchain
-from .constants import DEFAULT_DIFFICULTY_BITS
+from .constants import DEFAULT_DIFFICULTY_BITS, LIFECYCLE_SCHEMA_VERSION, PERSISTENCE_SCHEMA_VERSION, READINESS_SCHEMA_VERSION
 from .crypto import generate_keypair
 from .errors import NodeRuntimeError, PersistenceError
 from .mempool import Mempool, MempoolRepairReport
 from .models import Block, Transaction
-from .persistence import DataStore, Wallet, write_json
+from .node_config import NodeConfig, save_node_config
+from .persistence import DataStore, Wallet
 from .process import process_is_running
+from .process_identity import (
+    NodeLifecycle,
+    NodeReadiness,
+    cleanup_startup_files,
+    new_instance_id,
+    write_lifecycle,
+    write_readiness,
+)
 from .transactions import create_signed_transaction
 
 
@@ -232,21 +242,73 @@ def _append_log(log_path: Path, message: str, *, level: str = "INFO") -> None:
         log.write(f"{timestamp} {level} {message}\n")
 
 
-def run_node_process(data_dir: str | Path, port: int = 0) -> int:
+def run_node_process(
+    data_dir: str | Path,
+    port: int = 0,
+    *,
+    instance_id: str | None = None,
+) -> int:
     store = DataStore(data_dir)
     store.initialize()
     if store.lock_path.exists():
         raise NodeRuntimeError(f"Node data directory is already locked: {store.data_dir}")
+
+    resolved_instance_id = instance_id or os.environ.get("TOYCHAIN_INSTANCE_ID") or new_instance_id()
+    startup_files: list[Path] = []
+
     try:
-        descriptor = os.open(store.lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError as exc:
-        raise NodeRuntimeError(
-            f"Node data directory is already locked: {store.data_dir}"
-        ) from exc
-    os.close(descriptor)
-    store.stop_path.unlink(missing_ok=True)
-    store.pid_path.write_text(str(os.getpid()), encoding="ascii")
-    write_json(store.config_path, {"data_dir": str(store.data_dir), "port": port})
+        try:
+            descriptor = os.open(store.lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError as exc:
+            raise NodeRuntimeError(
+                f"Node data directory is already locked: {store.data_dir}"
+            ) from exc
+        os.close(descriptor)
+        startup_files.append(store.lock_path)
+        store.stop_path.unlink(missing_ok=True)
+
+        save_node_config(
+            store.config_path,
+            NodeConfig(
+                schema_version=PERSISTENCE_SCHEMA_VERSION,
+                data_dir=str(store.data_dir),
+                port=port,
+            ),
+        )
+        startup_files.append(store.config_path)
+
+        node = Node.open(store.data_dir, allow_locked=True)
+
+        lifecycle = NodeLifecycle(
+            schema_version=LIFECYCLE_SCHEMA_VERSION,
+            pid=os.getpid(),
+            instance_id=resolved_instance_id,
+            started_at=int(time.time()),
+            data_dir=str(store.data_dir),
+            executable=os.path.normcase(str(Path(sys.executable).resolve())),
+        )
+        write_lifecycle(store.lifecycle_path, lifecycle)
+        startup_files.append(store.lifecycle_path)
+
+        store.pid_path.write_text(str(os.getpid()), encoding="ascii")
+        startup_files.append(store.pid_path)
+
+        write_readiness(
+            store.ready_path,
+            NodeReadiness(
+                schema_version=READINESS_SCHEMA_VERSION,
+                instance_id=resolved_instance_id,
+                pid=os.getpid(),
+                data_dir=str(store.data_dir),
+                port=port,
+                ready_at=int(time.time()),
+            ),
+        )
+        startup_files.append(store.ready_path)
+    except Exception:
+        cleanup_startup_files(store, tuple(startup_files))
+        raise
+
     stopping = False
 
     def stop_handler(_signum, _frame) -> None:
@@ -260,7 +322,6 @@ def run_node_process(data_dir: str | Path, port: int = 0) -> int:
         signal.signal(signal.SIGBREAK, stop_handler)
 
     try:
-        node = Node.open(store.data_dir, allow_locked=True)
         _append_log(
             store.log_path,
             f"node started pid={os.getpid()} port={port} height={node.chain.height}",
@@ -309,3 +370,5 @@ def run_node_process(data_dir: str | Path, port: int = 0) -> int:
         store.pid_path.unlink(missing_ok=True)
         store.lock_path.unlink(missing_ok=True)
         store.stop_path.unlink(missing_ok=True)
+        store.lifecycle_path.unlink(missing_ok=True)
+        store.ready_path.unlink(missing_ok=True)

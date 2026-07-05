@@ -17,8 +17,9 @@ whether a data directory from an older or newer build is safe to open.
   A incompatible layout requires a new version byte and, where applicable, a new
   domain-separated label (see ADR 0001).
 - **JSON persistence** records carry an integer `schema_version` field in
-  `wallet.json`, `chain/index.json`, and `mempool/transactions.json`. The
-  supported version is `PERSISTENCE_SCHEMA_VERSION = 1` in `constants.py`.
+  `wallet.json`, `chain/index.json`, `mempool/transactions.json`, and
+  `config.json`. The supported version is `PERSISTENCE_SCHEMA_VERSION = 1` in
+  `constants.py`.
 - **Load rules:**
   - Missing `schema_version` is treated as version 1 (backward compatibility).
   - A schema version **newer** than the running release raises

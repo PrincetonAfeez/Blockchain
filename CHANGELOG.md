@@ -5,6 +5,36 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-06-20
+
+### Changed
+
+- `local-network.json` stores relative node names only; legacy absolute-path
+  registry records are rejected.
+- `config.json` is now a versioned persistence record validated by
+  `schema/node-config.schema.json`.
+- `validate-chain` verifies every stored block, not only the canonical branch.
+- `node stop` verifies process identity from `node.lifecycle.json` before
+  signaling a PID; use `node cleanup-stale` for stale files after manual review.
+- Node and local-network startup are failure-atomic: partial startup removes
+  lifecycle files, and local-network registry writes happen only after all nodes
+  are ready.
+
+### Fixed
+
+- Consensus validation rejects malformed `tc1` recipients on imported normal
+  transactions and malformed coinbase recipients on imported non-genesis blocks.
+- `local-network.json` paths are resolved and contained under the network root
+  before any stop/status side effects.
+- Lockfile completeness for reproducible installs.
+
+### Migration
+
+- Delete or archive an old `local-network.json` that stores `data_dir` paths and
+  rerun `network run-local` to create the new name-only format.
+- Existing `config.json` files without `schema_version` are treated as version 1
+  when loaded; new writes include `"schema_version": 1`.
+
 ## [1.0.0] - 2026-06-19
 
 ### Added
@@ -49,12 +79,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `schema/`; strict `from_dict()` loading rejects unknown keys and coerced
   types.
 
-### Fixed
-
-- Consensus validation now rejects malformed `tc1` recipients on imported normal
-  transactions and malformed coinbase recipients on imported non-genesis blocks.
-- `local-network.json` stores relative node names only; registry paths are
-  resolved and contained under the network root before any stop/status side
-  effects.
-
-[1.0.0]: #
+[2.0.0]: https://github.com/PrincetonAfeez/Blockchain/compare/v1.0.0...v2.0.0
+[1.0.0]: https://github.com/PrincetonAfeez/Blockchain/releases/tag/v1.0.0

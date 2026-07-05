@@ -175,9 +175,11 @@ Each data directory is isolated:
 
 ```text
 node1/
-  config.json
+  config.json          # schema_version 1; validated node config
   node.pid
   node.lock        # held by a running node process
+  node.lifecycle.json  # pid/instance identity written by the running node
+  node.ready.json      # readiness record written after successful startup
   node.writelock   # short-lived; serializes one-off state-changing CLI commands
   node.log
   wallet.json
@@ -195,8 +197,9 @@ fork choice; `canonical_tip.txt` is a human-readable mirror, not a trusted input
 race on a separate tip file). Loading trusts the node's own already-validated
 store — it rebuilds the block tree and replays transactions for balances and
 nonces but skips proof-of-work, Merkle, and signature re-checks — which keeps
-every command cheap. `validate-chain` is the full verifier: it re-checks the
-entire chain from genesis and confirms the trusted state matches a clean replay.
+every command cheap. `validate-chain` is the full verifier: it re-checks every
+stored block (canonical and fork branches) from genesis and confirms metadata
+and fork choice.
 
 A running node owns its data directory through an exclusive `node.lock`. While
 it runs it does real work: it drains its own mempool by mining pending
@@ -225,9 +228,9 @@ Version 1 binary layouts are stable for this release; a future format would use
 a new version byte and domain label (for example `TX_UNSIGNED_V2`).
 
 **JSON persistence** (`wallet.json`, `chain/index.json`,
-`mempool/transactions.json`) carries an integer `schema_version` (currently
-`1`). Files written by this release include the field; older files without it
-are treated as version 1 on load.
+`mempool/transactions.json`, `config.json`) carries an integer `schema_version`
+(currently `1`). Files written by this release include the field; older files
+without it are treated as version 1 on load.
 
 Expected behavior when opening data:
 
@@ -245,8 +248,8 @@ Run `validate-chain` after upgrading or hand-editing a data directory.
 
 **JSON schemas** for import/export and persistence formats are in
 [`schema/`](schema/README.md) (Draft 2020-12): transaction, block header,
-block, Merkle proof, wallet, chain index, mempool storage, and local network
-registry. Valid examples are in [`schema/examples/`](schema/examples/).
+block, Merkle proof, wallet, chain index, mempool storage, node config, and
+local network registry. Valid examples are in [`schema/examples/`](schema/examples/).
 Imported and persisted JSON is validated against these schemas before Python
 objects are constructed.
 
@@ -288,7 +291,8 @@ The non-obvious decisions and their trade-offs are recorded as ADRs in
 separation, the account model, most-work fork choice, the derived tip and
 trusted fast-load trust boundary, acceptance-only timestamp drift, data
 format compatibility / migration policy, canonical address validity, and local
-network registry path containment.
+network registry path containment, full-store validation, and node lifecycle
+identity before stop signals.
 
 ## Changelog
 

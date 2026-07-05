@@ -17,6 +17,7 @@ from .models import MerkleProof, Transaction
 from .node import Node, run_node_process
 from .persistence import read_json, write_json
 from .process import (
+    cleanup_stale_node_files,
     network_status,
     node_status,
     run_local_network,
@@ -138,7 +139,10 @@ def _add_global_parser() -> argparse.ArgumentParser:
     import_block.add_argument("block_file", help="path to a block JSON file")
 
     sub.add_parser("show-chain", help="list the canonical chain from genesis to tip")
-    validate = sub.add_parser("validate-chain", help="re-verify the whole chain from genesis")
+    validate = sub.add_parser(
+        "validate-chain",
+        help="re-verify every stored block from genesis, including fork branches",
+    )
     validate.add_argument("--explain", action="store_true", help="print a per-block rule trace")
     balance = sub.add_parser("balance", help="show an account balance (default: local wallet)")
     balance.add_argument("address", nargs="?", help="address to query (default: local wallet)")
@@ -169,6 +173,15 @@ def _add_global_parser() -> argparse.ArgumentParser:
     node_start.add_argument("--port", type=int, default=0, help="advisory port for the node")
     node_sub.add_parser("stop", help="stop the running node process")
     node_sub.add_parser("status", help="report whether the node is running")
+    cleanup = node_sub.add_parser(
+        "cleanup-stale",
+        help="remove stale pid/lock/stop/lifecycle files when the node is not running",
+    )
+    cleanup.add_argument(
+        "--dangerous",
+        action="store_true",
+        help="required when a live but unverified PID is present",
+    )
 
     network = sub.add_parser("network", help="orchestrate several local nodes")
     network_sub = network.add_subparsers(dest="network_command", required=True, metavar="<action>")
@@ -199,6 +212,10 @@ def _add_global_parser() -> argparse.ArgumentParser:
         type=int,
         default=0,
         help="advisory port for the internal node process",
+    )
+    internal.add_argument(
+        "--instance-id",
+        help="unique node instance token written to node.lifecycle.json",
     )
     return parser
 
@@ -361,13 +378,17 @@ def _handle_chain(args: argparse.Namespace) -> bool:
             ]
         )
     elif args.command == "validate-chain":
-        report = _reader(args).chain.validate_canonical_chain(explain=args.explain)
+        report = _reader(args).chain.validate_all_blocks(explain=args.explain)
         payload = {
             "valid": report.valid,
             "checked_blocks": report.checked_blocks,
+            "checked_canonical_blocks": report.checked_canonical_blocks,
+            "checked_fork_blocks": report.checked_fork_blocks,
             "tip_hash": report.tip_hash,
             "message": report.message,
         }
+        if report.invalid_block_hash is not None:
+            payload["invalid_block_hash"] = report.invalid_block_hash
         if args.explain:
             payload["steps"] = list(report.steps)
         _json(payload)
@@ -476,6 +497,14 @@ def _handle_process(args: argparse.Namespace) -> bool:
             _json(start_node(args.data_dir, args.port).to_dict())
         elif args.node_command == "stop":
             _json(stop_node(args.data_dir).to_dict())
+        elif args.node_command == "cleanup-stale":
+            from .persistence import DataStore
+
+            cleanup_stale_node_files(
+                DataStore(args.data_dir),
+                force=args.dangerous,
+            )
+            _json({"cleaned": True})
         else:
             _json(node_status(args.data_dir).to_dict())
         return True
@@ -541,7 +570,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "_node-run":
-            return run_node_process(args.data_dir, args.port)
+            return run_node_process(
+                args.data_dir,
+                args.port,
+                instance_id=getattr(args, "instance_id", None),
+            )
         handlers = (
             _handle_wallet,
             _handle_transactions,

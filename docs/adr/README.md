@@ -11,3 +11,6 @@ them. Each record is self-contained: Context, Decision, Consequences.
 - [0006 — Data format compatibility and migration policy](0006-data-format-compatibility.md)
 - [0007 — Canonical address validity at consensus validation](0007-canonical-address-validity.md)
 - [0008 — Local network registry path containment](0008-local-network-path-containment.md)
+- [0009 — Full-store validation for validate-chain](0009-full-store-validation.md)
+- [0010 — Node lifecycle identity before stop signals](0010-node-lifecycle-identity.md)
+- [0011 — Failure-atomic node and local-network startup](0011-failure-atomic-startup.md)
