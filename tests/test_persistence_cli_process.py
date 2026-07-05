@@ -1,3 +1,5 @@
+"""Tests for the persistence, CLI, and process functionality."""
+
 from __future__ import annotations
 
 import json
