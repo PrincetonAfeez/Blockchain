@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://toychain.local/schema/chain-index.schema.json",
+  "title": "Toychain chain index",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "blocks"],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "blocks": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["parent_hash", "height", "cumulative_work"],
+        "properties": {
+          "parent_hash": {
+            "anyOf": [
+              { "type": "null" },
+              { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+            ]
+          },
+          "height": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "cumulative_work": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    }
+  }
+}

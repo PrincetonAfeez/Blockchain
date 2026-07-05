@@ -27,11 +27,17 @@ def address_from_public_key(public_key: bytes) -> str:
 
 
 def is_valid_address(address: str) -> bool:
-    """True if the string is a well-formed toychain address (``tc1`` + 40 hex)."""
+    """True if address is canonical lowercase ``tc1`` + 40 hex digits.
+
+    Toychain addresses have no checksum; a syntactically valid string may not
+    correspond to any generated wallet.
+    """
     if not isinstance(address, str) or not address.startswith("tc1"):
         return False
     body = address[3:]
     if len(body) != ADDRESS_HASH_BYTES * 2:
+        return False
+    if body != body.lower():
         return False
     try:
         bytes.fromhex(body)

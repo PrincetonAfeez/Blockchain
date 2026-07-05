@@ -354,13 +354,37 @@ def test_coinbase_cannot_enter_mempool(alice):
         Mempool().submit(coinbase, chain.state)
 
 
-def test_send_rejects_malformed_recipient(alice):
-    for bad in ("not-an-address", "tc1" + "z" * 40, "tc1abc", ""):
+def test_send_rejects_malformed_recipient(alice, bob):
+    for bad in (
+        "not-an-address",
+        "tc1" + "z" * 40,
+        "tc1abc",
+        "",
+        bob.address.upper(),
+        bob.address[:5].upper() + bob.address[5:],
+        "tc1" + bob.address[3:-1],
+    ):
         with pytest.raises(ValidationError, match="valid toychain address"):
             create_signed_transaction(
                 private_key=alice.private_key, public_key=alice.public_key,
                 sender=alice.address, recipient=bad, amount=5, nonce=0,
             )
+
+
+def test_make_block_candidate_rejects_invalid_miner(alice):
+    chain = Blockchain()
+    with pytest.raises(ValidationError, match="valid toychain address"):
+        make_block_candidate(
+            previous_hash=bytes.fromhex(chain.tip_hash),
+            miner_address="not-an-address",
+            height=1,
+        )
+    with pytest.raises(ValidationError, match="valid toychain address"):
+        make_block_candidate(
+            previous_hash=bytes.fromhex(chain.tip_hash),
+            miner_address="GENESIS",
+            height=1,
+        )
 
 
 def test_select_best_chain_never_picks_an_invalid_branch():

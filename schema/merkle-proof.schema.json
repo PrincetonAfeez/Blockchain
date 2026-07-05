@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://toychain.local/schema/merkle-proof.schema.json",
+  "title": "Toychain Merkle proof",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "root",
+    "tx_id",
+    "transaction_index",
+    "transaction_count",
+    "steps"
+  ],
+  "properties": {
+    "root": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "tx_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "transaction_index": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "transaction_count": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sibling", "sibling_on_left"],
+        "properties": {
+          "sibling": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "sibling_on_left": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  }
+}

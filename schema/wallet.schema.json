@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://toychain.local/schema/wallet.schema.json",
+  "title": "Toychain wallet",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "address", "public_key", "private_key"],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "address": {
+      "type": "string",
+      "pattern": "^tc1[0-9a-f]{40}$"
+    },
+    "public_key": {
+      "type": "string",
+      "contentEncoding": "base64"
+    },
+    "private_key": {
+      "type": "string",
+      "contentEncoding": "base64"
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://toychain.local/schema/block.schema.json",
+  "title": "Toychain block",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["header", "transactions"],
+  "properties": {
+    "header": {
+      "$ref": "block-header.schema.json"
+    },
+    "transactions": {
+      "type": "array",
+      "items": {
+        "$ref": "transaction.schema.json"
+      }
+    },
+    "hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

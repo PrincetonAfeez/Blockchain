@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "sender": "COINBASE",
+  "recipient": "GENESIS",
+  "amount": 50,
+  "nonce": 0,
+  "public_key": "35340b4979705ed5",
+  "signature": ""
+}

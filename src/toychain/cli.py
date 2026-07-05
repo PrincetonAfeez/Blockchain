@@ -100,7 +100,10 @@ def _add_global_parser() -> argparse.ArgumentParser:
     sub.add_parser("wallet-info", help="show address, balance, and next nonce")
 
     send = sub.add_parser("send", help="build and submit a signed transaction")
-    send.add_argument("recipient", help="recipient toychain address (tc1...)")
+    send.add_argument(
+        "recipient",
+        help="recipient toychain address (tc1 + 40 lowercase hex digits)",
+    )
     send.add_argument("amount", type=int, help="integer amount to transfer")
     send.add_argument("--out", help="also write the signed transaction to this file")
     send.add_argument("--no-submit", action="store_true", help="build without submitting")
@@ -116,8 +119,16 @@ def _add_global_parser() -> argparse.ArgumentParser:
     import_tx.add_argument("tx_file", help="path to a transaction JSON file")
 
     mine = sub.add_parser("mine", help="mine a block from the mempool")
-    mine.add_argument("--miner", help="miner address for the coinbase (default: local wallet)")
-    mine.add_argument("--difficulty", type=int, default=8, help="difficulty bits (default: 8)")
+    mine.add_argument(
+        "--miner",
+        help="miner toychain address for the coinbase (tc1 + 40 lowercase hex; default: local wallet)",
+    )
+    mine.add_argument(
+        "--difficulty",
+        type=int,
+        default=8,
+        help="proof-of-work difficulty in bits, 0–24 inclusive (default: 8)",
+    )
     inspect_block = sub.add_parser("inspect-block", help="show a block and its header bytes")
     inspect_block.add_argument("block_hash", help="block hash (hex)")
     export_block = sub.add_parser("export-block", help="write a known block to a file")
@@ -179,10 +190,16 @@ def _add_global_parser() -> argparse.ArgumentParser:
     debug_consensus = sub.add_parser("debug-consensus", help="run fork choice over a tip file")
     debug_consensus.add_argument("block_tree_file", help="JSON mapping block hash -> score")
 
-    # Internal entry point used by `node start` to spawn the daemon. Omitting
-    # help= keeps it out of the command listing while remaining invokable.
+    # Internal entry point used by `node start` to spawn the daemon. The parser
+    # itself is hidden from the top-level command listing (help= omitted above),
+    # but `_node-run --help` remains available for operators and tests.
     internal = sub.add_parser("_node-run")
-    internal.add_argument("--port", type=int, default=0)
+    internal.add_argument(
+        "--port",
+        type=int,
+        default=0,
+        help="advisory port for the internal node process",
+    )
     return parser
 
 

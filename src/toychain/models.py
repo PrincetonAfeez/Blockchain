@@ -7,23 +7,35 @@ from typing import Any
 
 from .constants import COINBASE_SENDER, FORMAT_VERSION
 from .errors import CodecError
+from .json_validation import (
+    format_version,
+    hex_bytes,
+    hex_bytes_allowed,
+    reject_unknown_keys,
+    strict_bool,
+    strict_int,
+    strict_str,
+    validate_json_schema,
+)
 
-
-def _hex_bytes(value: Any, field_name: str) -> bytes:
-    if not isinstance(value, str):
-        raise CodecError(f"{field_name} must be a hexadecimal string")
-    try:
-        return bytes.fromhex(value)
-    except ValueError as exc:
-        raise CodecError(f"{field_name} is not valid hexadecimal") from exc
-
-
-def _strict_int(value: Any, field_name: str) -> int:
-    # Reject floats (e.g. 5.9) and bools so amounts/nonces are never silently
-    # truncated; consensus-critical state is integer-only.
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise CodecError(f"{field_name} must be an integer")
-    return value
+_TRANSACTION_KEYS = frozenset(
+    {"version", "sender", "recipient", "amount", "nonce", "public_key", "signature"}
+)
+_BLOCK_HEADER_KEYS = frozenset(
+    {
+        "version",
+        "previous_hash",
+        "merkle_root",
+        "timestamp",
+        "difficulty_bits",
+        "nonce",
+    }
+)
+_BLOCK_KEYS = frozenset({"header", "transactions", "hash"})
+_MERKLE_STEP_KEYS = frozenset({"sibling", "sibling_on_left"})
+_MERKLE_PROOF_KEYS = frozenset(
+    {"root", "tx_id", "transaction_index", "transaction_count", "steps"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,17 +87,29 @@ class Transaction:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Transaction":
+        if not isinstance(data, dict):
+            raise CodecError("Malformed transaction object")
+        validate_json_schema(data, "transaction")
+        reject_unknown_keys(data, _TRANSACTION_KEYS, "transaction")
         try:
             return cls(
-                version=_strict_int(data["version"], "version"),
-                sender=str(data["sender"]),
-                recipient=str(data["recipient"]),
-                amount=_strict_int(data["amount"], "amount"),
-                nonce=_strict_int(data["nonce"], "nonce"),
-                public_key=_hex_bytes(data["public_key"], "public_key"),
-                signature=_hex_bytes(data["signature"], "signature"),
+                version=format_version(data["version"]),
+                sender=strict_str(data["sender"], "sender"),
+                recipient=strict_str(data["recipient"], "recipient"),
+                amount=strict_int(data["amount"], "amount"),
+                nonce=strict_int(data["nonce"], "nonce"),
+                public_key=hex_bytes_allowed(
+                    data["public_key"],
+                    "public_key",
+                    allowed_lengths=(0, 8, 32),
+                ),
+                signature=hex_bytes_allowed(
+                    data["signature"],
+                    "signature",
+                    allowed_lengths=(0, 64),
+                ),
             )
-        except (KeyError, TypeError, ValueError) as exc:
+        except KeyError as exc:
             raise CodecError("Malformed transaction object") from exc
 
 
@@ -124,16 +148,20 @@ class BlockHeader:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "BlockHeader":
+        if not isinstance(data, dict):
+            raise CodecError("Malformed block header object")
+        validate_json_schema(data, "block-header")
+        reject_unknown_keys(data, _BLOCK_HEADER_KEYS, "block header")
         try:
             return cls(
-                version=_strict_int(data["version"], "version"),
-                previous_hash=_hex_bytes(data["previous_hash"], "previous_hash"),
-                merkle_root=_hex_bytes(data["merkle_root"], "merkle_root"),
-                timestamp=_strict_int(data["timestamp"], "timestamp"),
-                difficulty_bits=_strict_int(data["difficulty_bits"], "difficulty_bits"),
-                nonce=_strict_int(data["nonce"], "nonce"),
+                version=format_version(data["version"]),
+                previous_hash=hex_bytes(data["previous_hash"], "previous_hash", exact_bytes=32),
+                merkle_root=hex_bytes(data["merkle_root"], "merkle_root", exact_bytes=32),
+                timestamp=strict_int(data["timestamp"], "timestamp"),
+                difficulty_bits=strict_int(data["difficulty_bits"], "difficulty_bits"),
+                nonce=strict_int(data["nonce"], "nonce"),
             )
-        except (KeyError, TypeError, ValueError) as exc:
+        except KeyError as exc:
             raise CodecError("Malformed block header object") from exc
 
 
@@ -160,20 +188,26 @@ class Block:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Block":
+        if not isinstance(data, dict):
+            raise CodecError("Malformed block object")
+        validate_json_schema(data, "block")
+        reject_unknown_keys(data, _BLOCK_KEYS, "block")
         try:
-            header = BlockHeader.from_dict(data["header"])
             raw_transactions = data["transactions"]
             if not isinstance(raw_transactions, list):
                 raise CodecError("transactions must be a list")
             block = cls(
-                header=header,
+                header=BlockHeader.from_dict(data["header"]),
                 transactions=tuple(Transaction.from_dict(tx) for tx in raw_transactions),
             )
             stored_hash = data.get("hash")
-            if stored_hash is not None and stored_hash != block.hash:
-                raise CodecError("Stored block hash does not match its canonical header")
+            if stored_hash is not None:
+                if not isinstance(stored_hash, str):
+                    raise CodecError("hash must be a string")
+                if stored_hash != block.hash:
+                    raise CodecError("Stored block hash does not match its canonical header")
             return block
-        except (KeyError, TypeError) as exc:
+        except KeyError as exc:
             raise CodecError("Malformed block object") from exc
 
 
@@ -187,14 +221,15 @@ class MerkleProofStep:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "MerkleProofStep":
+        if not isinstance(data, dict):
+            raise CodecError("Malformed Merkle proof step")
+        reject_unknown_keys(data, _MERKLE_STEP_KEYS, "Merkle proof step")
         try:
-            if not isinstance(data["sibling_on_left"], bool):
-                raise CodecError("sibling_on_left must be a boolean")
             return cls(
-                sibling=_hex_bytes(data["sibling"], "sibling"),
-                sibling_on_left=data["sibling_on_left"],
+                sibling=hex_bytes(data["sibling"], "sibling", exact_bytes=32),
+                sibling_on_left=strict_bool(data["sibling_on_left"], "sibling_on_left"),
             )
-        except (KeyError, TypeError) as exc:
+        except KeyError as exc:
             raise CodecError("Malformed Merkle proof step") from exc
 
 
@@ -217,17 +252,20 @@ class MerkleProof:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "MerkleProof":
+        if not isinstance(data, dict):
+            raise CodecError("Malformed Merkle proof object")
+        validate_json_schema(data, "merkle-proof")
+        reject_unknown_keys(data, _MERKLE_PROOF_KEYS, "Merkle proof")
         try:
             raw_steps = data["steps"]
             if not isinstance(raw_steps, list):
                 raise CodecError("steps must be a list")
             return cls(
-                root=_hex_bytes(data["root"], "root"),
-                tx_id=_hex_bytes(data["tx_id"], "tx_id"),
-                transaction_index=_strict_int(data["transaction_index"], "transaction_index"),
-                transaction_count=_strict_int(data["transaction_count"], "transaction_count"),
+                root=hex_bytes(data["root"], "root", exact_bytes=32),
+                tx_id=hex_bytes(data["tx_id"], "tx_id", exact_bytes=32),
+                transaction_index=strict_int(data["transaction_index"], "transaction_index"),
+                transaction_count=strict_int(data["transaction_count"], "transaction_count"),
                 steps=tuple(MerkleProofStep.from_dict(step) for step in raw_steps),
             )
-        except (KeyError, TypeError, ValueError) as exc:
+        except KeyError as exc:
             raise CodecError("Malformed Merkle proof object") from exc
-

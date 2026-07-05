@@ -12,7 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .errors import NodeRuntimeError, PersistenceError
+from .errors import CodecError, NodeRuntimeError, PersistenceError
+from .json_validation import reject_unknown_keys, validate_json_schema
 from .persistence import DataStore, read_json, write_json
 
 
@@ -185,6 +186,11 @@ def network_status(base_dir: str | Path) -> list[ProcessStatus]:
     data = read_json(registry)
     if not isinstance(data, dict) or not isinstance(data.get("nodes"), list):
         raise NodeRuntimeError("Malformed local network registry")
+    try:
+        validate_json_schema(data, "local-network")
+        reject_unknown_keys(data, frozenset({"nodes"}), "local network registry")
+    except CodecError as exc:
+        raise NodeRuntimeError(str(exc)) from exc
     return [node_status(item["data_dir"]) for item in data["nodes"]]
 
 

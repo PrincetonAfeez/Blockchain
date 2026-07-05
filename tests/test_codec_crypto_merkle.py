@@ -16,7 +16,7 @@ from toychain.codec import (
     parse_transaction,
 )
 from toychain.constants import FORMAT_VERSION
-from toychain.crypto import address_from_public_key
+from toychain.crypto import address_from_public_key, is_valid_address
 from toychain.errors import CodecError, ValidationError
 from toychain.merkle import (
     build_merkle_root,
@@ -45,6 +45,25 @@ def test_key_generation_and_address_are_stable(alice):
     assert len(alice.private_key) == 32
     assert len(alice.public_key) == 32
     assert address_from_public_key(alice.public_key) == alice.address
+    assert is_valid_address(alice.address)
+
+
+def test_is_valid_address_enforces_canonical_form(bob):
+    assert is_valid_address(bob.address)
+    assert not is_valid_address(bob.address.upper())
+    assert not is_valid_address(bob.address[:5].upper() + bob.address[5:])
+    assert not is_valid_address("not-an-address")
+    assert not is_valid_address("tc1" + "z" * 40)
+    assert not is_valid_address("tc1abc")
+    assert not is_valid_address("")
+    assert not is_valid_address("tc1" + bob.address[3:-1])  # wrong length
+
+    # A one-character hex substitution stays syntactically valid (no checksum).
+    last = bob.address[-1]
+    substitute = "0" if last != "0" else "1"
+    typo = bob.address[:-1] + substitute
+    assert typo != bob.address
+    assert is_valid_address(typo)
 
 
 def test_signature_verifies_and_tampering_fails(alice, bob):
@@ -138,7 +157,7 @@ def test_transaction_from_dict_rejects_non_integer_amount(alice, bob):
 
     base = signed_tx(alice, bob).to_dict()
     for bad in (5.9, "5", True):
-        with pytest.raises(CodecError, match="amount must be an integer"):
+        with pytest.raises(CodecError, match="integer"):
             Transaction.from_dict({**base, "amount": bad})
 
 
@@ -146,16 +165,16 @@ def test_header_and_proof_reject_non_integer_fields():
     from toychain.models import BlockHeader, MerkleProof
 
     header = GENESIS_BLOCK.header.to_dict()
-    with pytest.raises(CodecError, match="timestamp must be an integer"):
+    with pytest.raises(CodecError, match="integer"):
         BlockHeader.from_dict({**header, "timestamp": 1700000000.5})
-    with pytest.raises(CodecError, match="difficulty_bits must be an integer"):
+    with pytest.raises(CodecError, match="integer"):
         BlockHeader.from_dict({**header, "difficulty_bits": True})
 
     proof = {
         "root": "00" * 32, "tx_id": "11" * 32,
         "transaction_index": 0, "transaction_count": 1, "steps": [],
     }
-    with pytest.raises(CodecError, match="transaction_index must be an integer"):
+    with pytest.raises(CodecError, match="integer"):
         MerkleProof.from_dict({**proof, "transaction_index": 1.0})
 
 

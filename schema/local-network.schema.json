@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://toychain.local/schema/local-network.schema.json",
+  "title": "Toychain local network registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["nodes"],
+  "properties": {
+    "nodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["data_dir", "running", "pid", "port", "log_file"],
+        "properties": {
+          "data_dir": {
+            "type": "string"
+          },
+          "running": {
+            "type": "boolean"
+          },
+          "pid": {
+            "anyOf": [
+              { "type": "null" },
+              { "type": "integer", "minimum": 1 }
+            ]
+          },
+          "port": {
+            "anyOf": [
+              { "type": "null" },
+              { "type": "integer", "minimum": 0 }
+            ]
+          },
+          "log_file": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

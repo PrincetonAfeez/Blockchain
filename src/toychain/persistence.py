@@ -9,11 +9,25 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .constants import PERSISTENCE_SCHEMA_VERSION
+from .json_validation import (
+    persistence_schema_version,
+    reject_unknown_keys,
+    strict_str,
+    validate_json_schema,
+)
 from .chain import Blockchain
 from .crypto import KeyPair, address_from_public_key, public_key_from_private
 from .errors import CodecError, ConsensusError, PersistenceError
 from .mempool import Mempool
 from .models import Block, Transaction
+
+
+def _normalize_persistence_record(data: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(data)
+    if "schema_version" not in normalized:
+        normalized["schema_version"] = PERSISTENCE_SCHEMA_VERSION
+    return normalized
 
 
 def _is_block_hash(value: Any) -> bool:
@@ -25,6 +39,18 @@ def _is_block_hash(value: Any) -> bool:
     except ValueError:
         return False
     return value == value.lower()
+
+
+def _require_supported_schema(data: dict[str, Any], path: Path) -> int:
+    raw = data.get("schema_version", 1)
+    if not isinstance(raw, int):
+        raise PersistenceError(f"Malformed schema version in {path}")
+    if raw > PERSISTENCE_SCHEMA_VERSION:
+        raise PersistenceError(
+            f"Unsupported schema version {raw} in {path}; "
+            f"this release supports up to {PERSISTENCE_SCHEMA_VERSION}"
+        )
+    return raw
 
 
 def read_json(path: Path) -> Any:
@@ -50,6 +76,9 @@ def write_json(path: Path, value: Any) -> None:
     write_text_atomic(path, json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
+_WALLET_KEYS = frozenset({"schema_version", "address", "public_key", "private_key"})
+
+
 @dataclass(frozen=True, slots=True)
 class Wallet:
     private_key: bytes
@@ -71,12 +100,22 @@ class Wallet:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Wallet":
+        if not isinstance(data, dict):
+            raise PersistenceError("Malformed wallet file")
+        normalized = _normalize_persistence_record(data)
         try:
-            private_key = base64.b64decode(data["private_key"], validate=True)
-            public_key = base64.b64decode(data["public_key"], validate=True)
-            address = str(data["address"])
-        except (KeyError, TypeError, ValueError) as exc:
+            validate_json_schema(normalized, "wallet")
+            reject_unknown_keys(normalized, _WALLET_KEYS, "wallet")
+            persistence_schema_version(normalized["schema_version"])
+            private_key = base64.b64decode(normalized["private_key"], validate=True)
+            public_key = base64.b64decode(normalized["public_key"], validate=True)
+            address = strict_str(normalized["address"], "address")
+        except (KeyError, TypeError, ValueError, CodecError) as exc:
             raise PersistenceError("Malformed wallet file") from exc
+        if len(public_key) != 32:
+            raise PersistenceError("Wallet public key must be exactly 32 bytes")
+        if len(private_key) != 32:
+            raise PersistenceError("Wallet private key must be exactly 32 bytes")
         if public_key_from_private(private_key) != public_key:
             raise PersistenceError("Wallet private and public keys do not match")
         if address_from_public_key(public_key) != address:
@@ -108,7 +147,10 @@ class DataStore:
     def save_wallet(self, wallet: Wallet) -> None:
         if self.wallet_path.exists():
             raise PersistenceError(f"Wallet already exists: {self.wallet_path}")
-        write_json(self.wallet_path, wallet.to_dict(include_private=True))
+        write_json(
+            self.wallet_path,
+            {"schema_version": PERSISTENCE_SCHEMA_VERSION, **wallet.to_dict(include_private=True)},
+        )
         try:
             self.wallet_path.chmod(0o600)
         except OSError:
@@ -122,6 +164,7 @@ class DataStore:
         data = read_json(self.wallet_path)
         if not isinstance(data, dict):
             raise PersistenceError("Wallet file must contain a JSON object")
+        _require_supported_schema(_normalize_persistence_record(data), self.wallet_path)
         return Wallet.from_dict(data)
 
     def save_chain(self, chain: Blockchain) -> None:
@@ -133,6 +176,7 @@ class DataStore:
         write_json(
             self.index_path,
             {
+                "schema_version": PERSISTENCE_SCHEMA_VERSION,
                 "blocks": {
                     block_hash: metadata.to_dict()
                     for block_hash, metadata in chain.metadata.items()
@@ -150,6 +194,12 @@ class DataStore:
         index = read_json(self.index_path)
         if not isinstance(index, dict) or not isinstance(index.get("blocks"), dict):
             raise PersistenceError("Malformed chain index")
+        normalized_index = _normalize_persistence_record(index)
+        _require_supported_schema(normalized_index, self.index_path)
+        try:
+            validate_json_schema(normalized_index, "chain-index")
+        except CodecError as exc:
+            raise PersistenceError(str(exc)) from exc
         blocks: list[Block] = []
         try:
             for block_hash in index["blocks"]:
@@ -178,7 +228,10 @@ class DataStore:
         self.initialize()
         write_json(
             self.mempool_path,
-            {"transactions": [tx.to_dict() for tx in mempool.transactions()]},
+            {
+                "schema_version": PERSISTENCE_SCHEMA_VERSION,
+                "transactions": [tx.to_dict() for tx in mempool.transactions()],
+            },
         )
 
     def load_mempool(self) -> Mempool:
@@ -187,6 +240,12 @@ class DataStore:
         data = read_json(self.mempool_path)
         if not isinstance(data, dict) or not isinstance(data.get("transactions"), list):
             raise PersistenceError("Malformed mempool file")
+        normalized = _normalize_persistence_record(data)
+        _require_supported_schema(normalized, self.mempool_path)
+        try:
+            validate_json_schema(normalized, "mempool")
+        except CodecError as exc:
+            raise PersistenceError(str(exc)) from exc
         try:
             return Mempool(Transaction.from_dict(tx) for tx in data["transactions"])
         except CodecError as exc:

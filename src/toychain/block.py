@@ -15,7 +15,7 @@ from .constants import (
     MAX_DIFFICULTY_BITS,
     ZERO_HASH,
 )
-from .crypto import sha256
+from .crypto import is_valid_address, sha256
 from .errors import ValidationError
 from .merkle import build_merkle_root
 from .models import Block, BlockHeader, Transaction
@@ -100,7 +100,13 @@ def make_block_candidate(
     transactions: list[Transaction] | tuple[Transaction, ...] = (),
     difficulty_bits: int = DEFAULT_DIFFICULTY_BITS,
     timestamp: int | None = None,
+    allow_genesis_recipient: bool = False,
 ) -> Block:
+    if miner_address == GENESIS_RECIPIENT:
+        if not allow_genesis_recipient:
+            raise ValidationError("Miner is not a valid toychain address.")
+    elif not is_valid_address(miner_address):
+        raise ValidationError("Miner is not a valid toychain address.")
     if timestamp is not None and not 0 <= timestamp < 2**64:
         raise ValidationError("Block timestamp must fit in an unsigned 64-bit integer")
     resolved_timestamp = int(time.time()) if timestamp is None else timestamp
@@ -132,6 +138,7 @@ def create_genesis_block() -> Block:
         transactions=(),
         difficulty_bits=0,
         timestamp=GENESIS_TIMESTAMP,
+        allow_genesis_recipient=True,
     )
     mined, _ = mine_block(candidate)
     return mined

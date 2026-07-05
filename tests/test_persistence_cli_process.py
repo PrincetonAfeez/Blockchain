@@ -138,6 +138,78 @@ def test_index_with_traversal_hash_is_rejected_without_reading_outside(tmp_path)
         node.store.load_chain()
 
 
+def test_mine_rejects_invalid_miner_and_leaves_chain_unchanged(tmp_path):
+    from toychain.cli import main
+
+    data_dir = tmp_path / "demo"
+    node = Node.open(data_dir)
+    wallet = node.create_wallet()
+    node.mine(wallet.address, difficulty_bits=1)
+    tip_before = node.chain.tip_hash
+    height_before = node.chain.height
+
+    exit_code = main(
+        [
+            "--data-dir",
+            str(data_dir),
+            "mine",
+            "--miner",
+            "not-an-address",
+            "--difficulty",
+            "1",
+        ]
+    )
+    assert exit_code == 1
+
+    reopened = Node.open(data_dir)
+    assert reopened.chain.tip_hash == tip_before
+    assert reopened.chain.height == height_before
+
+
+def test_persisted_json_includes_schema_version(tmp_path, bob):
+    node = Node.open(tmp_path)
+    wallet = node.create_wallet()
+    node.mine(wallet.address, difficulty_bits=1)
+    node.create_transaction(bob.address, 1)
+    node.store.save_mempool(node.mempool)
+
+    wallet_data = json.loads(node.store.wallet_path.read_text(encoding="utf-8"))
+    index_data = json.loads(node.store.index_path.read_text(encoding="utf-8"))
+    mempool_data = json.loads(node.store.mempool_path.read_text(encoding="utf-8"))
+    assert wallet_data["schema_version"] == 1
+    assert index_data["schema_version"] == 1
+    assert mempool_data["schema_version"] == 1
+
+
+def test_unsupported_schema_version_fails_without_modifying_files(tmp_path):
+    node = Node.open(tmp_path)
+    node.create_wallet()
+    node.mine(node.wallet().address, difficulty_bits=1)
+
+    original_index = node.store.index_path.read_text(encoding="utf-8")
+    index = json.loads(original_index)
+    index["schema_version"] = 99
+    node.store.index_path.write_text(json.dumps(index), encoding="utf-8")
+
+    with pytest.raises(PersistenceError, match="Unsupported schema version"):
+        node.store.load_chain()
+
+    reloaded = json.loads(node.store.index_path.read_text(encoding="utf-8"))
+    assert reloaded["schema_version"] == 99
+    assert "blocks" in reloaded
+
+
+def test_internal_node_run_help(capsys):
+    from toychain.cli import main
+
+    with pytest.raises(SystemExit) as exc:
+        main(["_node-run", "--help"])
+    assert exc.value.code == 0
+    help_text = capsys.readouterr().out
+    assert "--port" in help_text
+    assert "advisory port" in help_text
+
+
 def test_version_flag_prints_and_exits_zero(capsys):
     from toychain import __version__
     from toychain.cli import main

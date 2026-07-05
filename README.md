@@ -32,8 +32,11 @@ with `python -m pip install -r requirements.lock` before `pip install -e .`.
 
 Mining the first normal block pays the local wallet the fixed reward of 50.
 You can then create another wallet in a different data directory and transfer
-integer units (`send` rejects a recipient that is not a well-formed `tc1`
-address, so a typo fails instead of burning coins):
+integer units. `send` rejects malformed `tc1` addresses (wrong prefix, length,
+non-hexadecimal characters, or uppercase/mixed-case hex), which helps catch
+formatting mistakes. Toychain addresses have **no checksum**, so a typo that
+still yields a syntactically valid address will be accepted and coins sent to
+an address nobody controls:
 
 ```powershell
 toychain --data-dir receiver create-wallet
@@ -76,6 +79,11 @@ block     = SHA256("BLOCK_HEADER_V1\0" || canonical_header_bytes)
 address   = "tc1" || first_20_bytes(SHA256("ADDRESS_V1\0" || public_key))
 ```
 
+A valid address is exactly `tc1` followed by 40 lowercase hexadecimal digits.
+Wallet-derived addresses always use this canonical form. `send` and an explicit
+`mine --miner` value are checked with the same rules; the default miner is the
+local wallet address. There is no checksum — verify the full address carefully.
+
 Hashing provides integrity, addressing, and block linking. Signatures provide
 authorization: mutating a signed transaction invalidates it. Proof of work
 adds computational cost to a block. Mining may require many hashes, while
@@ -93,6 +101,37 @@ more than two hours ahead of the accepting node's clock is also rejected, but
 bound is the single clock-relative rule. Replaying or reloading already-accepted
 blocks does not consult the clock, so full-chain validation stays deterministic
 and clock-independent.
+
+## Limits
+
+Toychain enforces fixed bounds on consensus bytes, block rules, and local
+acceptance policy. The table lists externally observable limits, their units,
+and whether each limit is **consensus-critical** (every node must agree when
+validating bytes or replaying state), **codec-only** (canonical encode/decode
+rejects out-of-range values before they enter consensus), or **local policy**
+(applied only in specific contexts such as fresh block acceptance).
+
+| Limit | Value | Kind |
+| --- | --- | --- |
+| Maximum encoded field size (length-prefixed byte or UTF-8 string in a consensus record) | 1,000,000 bytes | codec-only |
+| Maximum transactions per encoded block | 100,000 | codec-only |
+| Proof-of-work difficulty (`mine --difficulty`, block header) | 0–24 bits (default 8) | consensus-critical |
+| Fixed coinbase block reward | 50 units | consensus-critical |
+| Coinbase extranonce (`public_key` field) | 0 or 8 bytes | consensus-critical |
+| Toychain address body | `tc1` + 40 lowercase hex digits | consensus-critical |
+| Ed25519 public key (normal transactions) | 32 bytes | consensus-critical |
+| Ed25519 signature (normal transactions) | 64 bytes | consensus-critical |
+| Block header `previous_hash` / Merkle root | 32 bytes each | consensus-critical |
+| Binary record version (`FORMAT_VERSION`) | 1 | consensus-critical |
+| JSON persistence `schema_version` | 1 (see [Data format compatibility](#data-format-compatibility)) | local persistence |
+| Future timestamp drift on **fresh** block acceptance (mined or imported) | 7,200 seconds (2 hours) ahead of the accepting node's clock | local policy |
+| Block timestamp vs parent | must be ≥ parent timestamp | consensus-critical |
+
+Oversized codec fields or transaction counts fail during encode or parse with
+`CodecError`. Out-of-range difficulty, rewards, or signatures fail during block
+or transaction validation with `ValidationError`. The drift bound is **not**
+re-checked when replaying or reloading blocks that were already accepted
+(`now=None`); see ADR 0005.
 
 ## Merkle trees
 
@@ -162,6 +201,42 @@ subprocess lifecycle, signal/stop-file shutdown, and isolation. Nodes do not
 gossip in the core project; blocks and transactions move between them with
 explicit import/export commands.
 
+## Data format compatibility
+
+Toychain separates **consensus binary records** from **JSON persistence**.
+Both layers carry explicit version fields.
+
+**Binary records** (transactions, block headers) use a 1-byte `FORMAT_VERSION`
+(currently `1`). Parsers reject unknown versions, truncation, and extra bytes.
+Version 1 binary layouts are stable for this release; a future format would use
+a new version byte and domain label (for example `TX_UNSIGNED_V2`).
+
+**JSON persistence** (`wallet.json`, `chain/index.json`,
+`mempool/transactions.json`) carries an integer `schema_version` (currently
+`1`). Files written by this release include the field; older files without it
+are treated as version 1 on load.
+
+Expected behavior when opening data:
+
+| Situation | Behavior |
+| --- | --- |
+| Supported schema, readable data | Load normally |
+| Missing `schema_version` | Treated as version 1 |
+| Schema newer than this release | Fail with `PersistenceError`; **files are not modified** |
+| Future older schema needing migration | Migrate only via an explicit command (not implemented yet) |
+| Migration failure | Leave original files unchanged |
+
+Block JSON under `chain/blocks/` mirrors consensus objects and follows the
+binary `FORMAT_VERSION` inside each record; import/export validates those bytes.
+Run `validate-chain` after upgrading or hand-editing a data directory.
+
+**JSON schemas** for import/export and persistence formats are in
+[`schema/`](schema/README.md) (Draft 2020-12): transaction, block header,
+block, Merkle proof, wallet, chain index, mempool storage, and local network
+registry. Valid examples are in [`schema/examples/`](schema/examples/).
+Imported and persisted JSON is validated against these schemas before Python
+objects are constructed.
+
 ## Security and scope
 
 This is an educational toy, not money. Wallet files store the Ed25519 private
@@ -194,7 +269,13 @@ canonical tip, and equivalence of the trusted fast-load with full validation.
 The non-obvious decisions and their trade-offs are recorded as ADRs in
 [`docs/adr/`](docs/adr/README.md): canonical serialization and domain
 separation, the account model, most-work fork choice, the derived tip and
-trusted fast-load trust boundary, and acceptance-only timestamp drift.
+trusted fast-load trust boundary, acceptance-only timestamp drift, and data
+format compatibility / migration policy.
+
+## Changelog
+
+Release notes are recorded in [CHANGELOG.md](CHANGELOG.md) using
+[Keep a Changelog](https://keepachangelog.com/) format.
 
 ## License
 

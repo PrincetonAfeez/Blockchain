@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://toychain.local/schema/block-header.schema.json",
+  "title": "Toychain block header",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "previous_hash",
+    "merkle_root",
+    "timestamp",
+    "difficulty_bits",
+    "nonce"
+  ],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1
+    },
+    "previous_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "merkle_root": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "timestamp": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "difficulty_bits": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 24
+    },
+    "nonce": {
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}
