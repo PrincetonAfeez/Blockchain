@@ -1,0 +1,32 @@
+"""Constants for the toychain package."""
+
+from __future__ import annotations
+
+TX_UNSIGNED_DOMAIN = b"TX_UNSIGNED_V1\x00"
+TX_SIGNED_DOMAIN = b"TX_SIGNED_V1\x00"
+MERKLE_LEAF_DOMAIN = b"MERKLE_LEAF_V1\x00"
+MERKLE_NODE_DOMAIN = b"MERKLE_NODE_V1\x00"
+BLOCK_HEADER_DOMAIN = b"BLOCK_HEADER_V1\x00"
+ADDRESS_DOMAIN = b"ADDRESS_V1\x00"
+
+TX_UNSIGNED_MAGIC = b"TXU"
+TX_SIGNED_MAGIC = b"TXS"
+BLOCK_HEADER_MAGIC = b"BHD"
+BLOCK_MAGIC = b"BLK"
+
+FORMAT_VERSION = 1
+COINBASE_SENDER = "COINBASE"
+COINBASE_EXTRANONCE_BYTES = 8
+BLOCK_REWARD = 50
+GENESIS_TIMESTAMP = 1_700_000_000
+GENESIS_RECIPIENT = "GENESIS"
+ZERO_HASH = bytes(32)
+DEFAULT_DIFFICULTY_BITS = 8
+MAX_DIFFICULTY_BITS = 24
+ADDRESS_HASH_BYTES = 20
+
+# A block whose timestamp is more than this many seconds ahead of the
+# validating node's clock is rejected. This is the one intentionally
+# clock-relative consensus rule; every other rule is a deterministic replay.
+MAX_TIMESTAMP_DRIFT_SECONDS = 7200
+
