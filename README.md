@@ -217,6 +217,17 @@ subprocess lifecycle, signal/stop-file shutdown, and isolation. Nodes do not
 gossip in the core project; blocks and transactions move between them with
 explicit import/export commands.
 
+`network run-local` writes `local-network.starting.json` before launching
+children and promotes it to `local-network.json` only after every node is
+ready. If startup fails, rollback stops or terminates started children using
+parent-held process handles; temporary registries are removed only after every
+spawned child is confirmed dead. When a child survives rollback (for example
+because `node stop` refused an unverified PID or termination failed),
+`local-network.starting.json` is preserved as a recovery registry with node
+name, port, PID, instance id, and lifecycle state. Inspect that file and use
+`node status` / `node stop` (or `node cleanup-stale --dangerous` after manual
+review) on the listed directories before retrying startup.
+
 ## Data format compatibility
 
 Toychain separates **consensus binary records** from **JSON persistence**.

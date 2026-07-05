@@ -17,8 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `node stop` verifies process identity from `node.lifecycle.json` before
   signaling a PID; use `node cleanup-stale` for stale files after manual review.
 - Node and local-network startup are failure-atomic: partial startup removes
-  lifecycle files, and local-network registry writes happen only after all nodes
-  are ready.
+  lifecycle files once every spawned child is confirmed dead, and
+  local-network registry writes happen only after all nodes are ready. Failed
+  local-network startup preserves `local-network.starting.json` as a recovery
+  registry whenever any child PID remains live (including `live_unverified` or
+  `malformed` states).
 - `node cleanup-stale` removes lifecycle files only when the node is not running;
   verified live nodes are never cleaned (`--dangerous` is for live unverified PIDs).
 - Process identity verification is fail-closed: executable, command line,
@@ -32,6 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Local-network startup rollback uses physical PID liveness (`pid_is_live`) and
+  parent-held `Popen` handles instead of `ProcessStatus.running`, preserving
+  `local-network.starting.json` when stop is refused or termination fails and
+  any child remains alive.
 - Consensus validation rejects malformed `tc1` recipients on imported normal
   transactions and malformed coinbase recipients on imported non-genesis blocks.
 - `local-network.json` paths are resolved and contained under the network root

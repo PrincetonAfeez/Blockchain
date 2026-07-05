@@ -40,6 +40,10 @@ class ProcessStatus:
     message: str | None = None
     instance_id: str | None = None
 
+    @property
+    def pid_is_live(self) -> bool:
+        return self.pid is not None and process_is_running(self.pid)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "data_dir": self.data_dir,
@@ -315,26 +319,12 @@ def _wait_for_node_ready(
     )
 
 
-def start_node(data_dir: str | Path, port: int = 0) -> ProcessStatus:
-    validate_port_value(port)
-    store = DataStore(data_dir)
-    store.initialize()
-    existing = node_status(store.data_dir)
-    if existing.state == "running_verified":
-        raise NodeRuntimeError(f"Node is already running with PID {existing.pid}")
-    if existing.state == "live_unverified":
-        raise NodeRuntimeError(
-            f"Refusing to start node: {existing.message or 'live unverified PID present'}"
-        )
-    if existing.state == "malformed":
-        raise NodeRuntimeError(
-            f"Refusing to start node: {existing.message or 'malformed node files'}"
-        )
-    if existing.state == "stale":
-        cleanup_stale_node_files(store)
-    store.lifecycle_path.unlink(missing_ok=True)
-    store.ready_path.unlink(missing_ok=True)
-    instance_id = new_instance_id()
+def _spawn_node_child(
+    store: DataStore,
+    *,
+    port: int,
+    instance_id: str,
+) -> subprocess.Popen[Any]:
     command = [
         sys.executable,
         "-m",
@@ -358,20 +348,62 @@ def start_node(data_dir: str | Path, port: int = 0) -> ProcessStatus:
     creationflags = 0
     if os.name == "nt":
         creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
+    with store.log_path.open("a", encoding="utf-8") as log:
+        return subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=log,
+            cwd=store.data_dir,
+            env=environment,
+            creationflags=creationflags,
+            start_new_session=os.name != "nt",
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class StartedChild:
+    name: str
+    port: int
+    data_dir: str
+    instance_id: str
+    popen: subprocess.Popen[Any]
+    status: ProcessStatus
+
+
+def _prepare_node_start(data_dir: str | Path, port: int) -> tuple[DataStore, str]:
+    validate_port_value(port)
+    store = DataStore(data_dir)
+    store.initialize()
+    existing = node_status(store.data_dir)
+    if existing.state == "running_verified":
+        raise NodeRuntimeError(f"Node is already running with PID {existing.pid}")
+    if existing.state == "live_unverified":
+        raise NodeRuntimeError(
+            f"Refusing to start node: {existing.message or 'live unverified PID present'}"
+        )
+    if existing.state == "malformed":
+        raise NodeRuntimeError(
+            f"Refusing to start node: {existing.message or 'malformed node files'}"
+        )
+    if existing.state == "stale":
+        cleanup_stale_node_files(store)
+    store.lifecycle_path.unlink(missing_ok=True)
+    store.ready_path.unlink(missing_ok=True)
+    return store, new_instance_id()
+
+
+def start_node_with_handle(
+    data_dir: str | Path,
+    port: int = 0,
+    *,
+    node_name: str | None = None,
+) -> StartedChild:
+    store, instance_id = _prepare_node_start(data_dir, port)
     child: subprocess.Popen[Any] | None = None
     try:
-        with store.log_path.open("a", encoding="utf-8") as log:
-            child = subprocess.Popen(
-                command,
-                stdin=subprocess.DEVNULL,
-                stdout=log,
-                stderr=log,
-                cwd=store.data_dir,
-                env=environment,
-                creationflags=creationflags,
-                start_new_session=os.name != "nt",
-            )
-        return _wait_for_node_ready(
+        child = _spawn_node_child(store, port=port, instance_id=instance_id)
+        status = _wait_for_node_ready(
             store,
             instance_id,
             deadline=time.time() + 5.0,
@@ -395,6 +427,19 @@ def start_node(data_dir: str | Path, port: int = 0) -> ProcessStatus:
                 f"{exc}; additionally {cleanup_exc}"
             ) from exc
         raise
+    assert child is not None
+    return StartedChild(
+        name=node_name or store.data_dir.name,
+        port=port,
+        data_dir=str(store.data_dir),
+        instance_id=instance_id,
+        popen=child,
+        status=status,
+    )
+
+
+def start_node(data_dir: str | Path, port: int = 0) -> ProcessStatus:
+    return start_node_with_handle(data_dir, port).status
 
 
 def stop_node(data_dir: str | Path, timeout: float = 5.0) -> ProcessStatus:
@@ -470,6 +515,81 @@ def _update_starting_registry_entry(
     write_json(path, {"nodes": updated_nodes})
 
 
+def _rollback_started_children(
+    started_children: list[StartedChild],
+    *,
+    starting_registry: Path,
+    planned_nodes: list[dict[str, Any]],
+    original_error: Exception,
+) -> None:
+    recovery_nodes: list[dict[str, Any]] = []
+
+    for child in started_children:
+        store = DataStore(child.data_dir)
+        stop_failure: str | None = None
+        current = node_status(child.data_dir)
+
+        if current.state == "running_verified":
+            try:
+                stop_node(child.data_dir)
+            except NodeRuntimeError as exc:
+                stop_failure = str(exc)
+
+        if child.popen.poll() is None:
+            _terminate_subprocess(child.popen, store)
+            _wait_for_child_exit(child.popen)
+
+        current = node_status(child.data_dir)
+        popen_live = child.popen.poll() is None
+        parent_pid = child.popen.pid
+        if popen_live:
+            pid_live = True
+        else:
+            # Parent-held Popen confirms this spawn exited; only treat a different
+            # tracked PID as live (orphan / pid reuse on the same path).
+            pid_live = current.pid_is_live and (
+                current.pid is not None and current.pid != parent_pid
+            )
+
+        if pid_live or popen_live:
+            recovery_nodes.append(
+                {
+                    "name": child.name,
+                    "port": child.port,
+                    "instance_id": child.instance_id,
+                    "pid": current.pid if current.pid is not None else child.popen.pid,
+                    "state": current.state,
+                    "message": current.message,
+                    "stop_failure": stop_failure,
+                }
+            )
+            continue
+
+        try:
+            _cleanup_dead_lifecycle_files(store, child=child.popen)
+        except NodeRuntimeError:
+            pass
+
+    if recovery_nodes:
+        write_json(
+            starting_registry,
+            {
+                "nodes": recovery_nodes,
+                "planned_nodes": planned_nodes,
+                "stop_failures": [
+                    entry["stop_failure"]
+                    for entry in recovery_nodes
+                    if entry.get("stop_failure")
+                ],
+                "startup_error": str(original_error),
+            },
+        )
+        raise NodeRuntimeError(
+            "Local network startup failed and live children remain; "
+            f"recovery registry preserved at {starting_registry}"
+        ) from original_error
+
+
 def run_local_network(
     base_dir: str | Path,
     nodes: int,
@@ -489,19 +609,23 @@ def run_local_network(
         }
         for index in range(nodes)
     ]
-    statuses: list[ProcessStatus] = []
+    started_children: list[StartedChild] = []
     try:
         _write_starting_registry(starting_registry, {"nodes": planned_nodes})
         for index in range(nodes):
             node_name = f"node{index + 1}"
             node_port = base_port + index
-            status = start_node(root / node_name, node_port)
-            statuses.append(status)
+            started = start_node_with_handle(
+                root / node_name,
+                node_port,
+                node_name=node_name,
+            )
+            started_children.append(started)
             _update_starting_registry_entry(
                 starting_registry,
                 name=node_name,
-                instance_id=_read_instance_id_from_store(DataStore(status.data_dir)),
-                pid=status.pid,
+                instance_id=started.instance_id,
+                pid=started.status.pid,
             )
         write_json(
             registry,
@@ -513,51 +637,20 @@ def run_local_network(
             },
         )
         starting_registry.unlink(missing_ok=True)
-        return statuses
+        return [child.status for child in started_children]
     except Exception as exc:
-        stop_failures: list[str] = []
-        any_alive = False
-        for status in statuses:
-            try:
-                stopped = stop_node(status.data_dir)
-                if stopped.running:
-                    any_alive = True
-                    stop_failures.append(
-                        f"{status.data_dir}: still running after stop (pid={stopped.pid})"
-                    )
-            except NodeRuntimeError as stop_exc:
-                current = node_status(status.data_dir)
-                if current.running:
-                    any_alive = True
-                stop_failures.append(f"{status.data_dir}: {stop_exc}")
         registry.unlink(missing_ok=True)
-        if any_alive:
-            if stop_failures:
-                write_json(
-                    starting_registry,
-                    {
-                        "nodes": planned_nodes,
-                        "stop_failures": stop_failures,
-                    },
-                )
-            raise NodeRuntimeError(
-                "Local network startup failed and one or more nodes are still running; "
-                f"recovery registry preserved at {starting_registry}"
-            ) from exc
+        try:
+            _rollback_started_children(
+                started_children,
+                starting_registry=starting_registry,
+                planned_nodes=planned_nodes,
+                original_error=exc,
+            )
+        except NodeRuntimeError:
+            raise
         starting_registry.unlink(missing_ok=True)
-        if stop_failures:
-            raise NodeRuntimeError(
-                "Local network startup failed during rollback: "
-                + "; ".join(stop_failures)
-            ) from exc
         raise
-
-
-def _read_instance_id_from_store(store: DataStore) -> str:
-    lifecycle = read_lifecycle(store.lifecycle_path)
-    if lifecycle is None:
-        raise NodeRuntimeError("Started node is missing lifecycle identity")
-    return lifecycle.instance_id
 
 
 def network_status(base_dir: str | Path) -> list[ProcessStatus]:

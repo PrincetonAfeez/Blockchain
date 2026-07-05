@@ -195,7 +195,14 @@ def _add_global_parser() -> argparse.ArgumentParser:
 
     network = sub.add_parser("network", help="orchestrate several local nodes")
     network_sub = network.add_subparsers(dest="network_command", required=True, metavar="<action>")
-    run_local = network_sub.add_parser("run-local", help="start N isolated local nodes")
+    run_local = network_sub.add_parser(
+        "run-local",
+        help=(
+            "start N isolated local nodes; on failure, rollback terminates "
+            "started children and preserves local-network.starting.json when "
+            "any live PID remains for recovery"
+        ),
+    )
     run_local.add_argument("--nodes", type=int, default=3, help="number of nodes (default: 3)")
     run_local.add_argument(
         "--base-port",

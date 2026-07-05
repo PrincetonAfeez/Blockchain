@@ -54,13 +54,20 @@ def process_is_running(pid: int) -> bool:
         return False
     if os.name == "nt":
         process_query_limited_information = 0x1000
+        still_active = 259
         handle = ctypes.windll.kernel32.OpenProcess(
             process_query_limited_information, False, pid
         )
         if not handle:
             return False
+        exit_code = ctypes.c_ulong()
+        success = ctypes.windll.kernel32.GetExitCodeProcess(
+            handle, ctypes.byref(exit_code)
+        )
         ctypes.windll.kernel32.CloseHandle(handle)
-        return True
+        if not success:
+            return False
+        return exit_code.value == still_active
     try:
         os.kill(pid, 0)
         return True

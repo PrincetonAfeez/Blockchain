@@ -12,7 +12,12 @@ from toychain.errors import NodeRuntimeError, PersistenceError
 from toychain.node import run_node_process
 from toychain.node_config import NodeConfig, load_node_config, save_node_config
 from toychain.persistence import DataStore
-from toychain.process import run_local_network, start_node, stop_node
+from toychain.process import (
+    run_local_network,
+    start_node,
+    start_node_with_handle,
+    stop_node,
+)
 from toychain.process_identity import read_readiness
 
 TEST_INSTANCE_ID = "00000000-0000-4000-8000-000000000099"
@@ -37,12 +42,12 @@ def test_config_write_failure_leaves_no_pid_or_lock(tmp_path, monkeypatch):
 def test_local_network_registry_write_failure_stops_started_nodes(tmp_path, monkeypatch):
     root = tmp_path / "network"
     started: list[str] = []
-    original_start = start_node
+    original_start = start_node_with_handle
 
-    def tracking_start(data_dir, port=0):
-        status = original_start(data_dir, port=port)
+    def tracking_start(data_dir, port=0, *, node_name=None):
+        started_child = original_start(data_dir, port=port, node_name=node_name)
         started.append(str(data_dir))
-        return status
+        return started_child
 
     def fail_registry(path, value):
         if path.name == "local-network.json":
@@ -51,7 +56,7 @@ def test_local_network_registry_write_failure_stops_started_nodes(tmp_path, monk
 
         return real_write_json(path, value)
 
-    monkeypatch.setattr("toychain.process.start_node", tracking_start)
+    monkeypatch.setattr("toychain.process.start_node_with_handle", tracking_start)
     monkeypatch.setattr("toychain.process.write_json", fail_registry)
 
     with pytest.raises(PersistenceError, match="simulated registry write failure"):
@@ -67,15 +72,15 @@ def test_local_network_registry_write_failure_stops_started_nodes(tmp_path, monk
 def test_local_network_second_child_failure_stops_first(tmp_path, monkeypatch):
     root = tmp_path / "network"
     calls = {"count": 0}
-    original_start = start_node
+    original_start = start_node_with_handle
 
-    def flaky_start(data_dir, port=0):
+    def flaky_start(data_dir, port=0, *, node_name=None):
         calls["count"] += 1
         if calls["count"] == 2:
             raise NodeRuntimeError("simulated child startup failure")
-        return original_start(data_dir, port=port)
+        return original_start(data_dir, port=port, node_name=node_name)
 
-    monkeypatch.setattr("toychain.process.start_node", flaky_start)
+    monkeypatch.setattr("toychain.process.start_node_with_handle", flaky_start)
 
     with pytest.raises(NodeRuntimeError, match="simulated child startup failure"):
         run_local_network(root, nodes=3, base_port=9920)
