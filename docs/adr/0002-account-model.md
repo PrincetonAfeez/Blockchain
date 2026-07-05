@@ -21,8 +21,8 @@ current nonce, which gives replay protection and a total order per sender.
 ## Consequences
 
 - Validation is simple and deterministic: check the signature, the
-  public-key/address relationship, `amount > 0`, the exact nonce, and sufficient
-  balance.
+  public-key/address relationship, canonical `tc1` sender/recipient form (ADR
+  0007), `amount > 0`, the exact nonce, and sufficient balance.
 - Double-spend within a block and replay across the chain are both caught by the
   nonce rule plus the confirmed-id/sender-nonce sets.
 - UTXO-specific features (coin selection, change, script-like ownership) are out

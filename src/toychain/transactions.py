@@ -9,6 +9,7 @@ from .constants import (
     COINBASE_EXTRANONCE_BYTES,
     COINBASE_SENDER,
     FORMAT_VERSION,
+    GENESIS_RECIPIENT,
     TX_SIGNED_DOMAIN,
     TX_UNSIGNED_DOMAIN,
 )
@@ -96,6 +97,14 @@ def validate_transaction_authenticity(tx: Transaction) -> None:
         raise ValidationError(f"Unsupported transaction version: {tx.version}")
     if not tx.sender or not tx.recipient:
         raise ValidationError("Sender and recipient must be non-empty")
+    if not is_valid_address(tx.recipient):
+        raise ValidationError(
+            f"Recipient is not a valid toychain address: {tx.recipient!r}"
+        )
+    if not is_valid_address(tx.sender):
+        raise ValidationError(
+            f"Sender is not a valid toychain address: {tx.sender!r}"
+        )
     if tx.amount <= 0:
         raise ValidationError("Transaction amount must be positive")
     if len(tx.public_key) != 32:
@@ -170,6 +179,11 @@ def apply_coinbase(tx: Transaction, state: ChainState, *, expected_height: int) 
         )
     if not tx.recipient:
         raise ValidationError("Coinbase recipient must be non-empty")
+    if expected_height == 0:
+        if tx.recipient != GENESIS_RECIPIENT:
+            raise ValidationError("Genesis coinbase recipient is invalid")
+    elif not is_valid_address(tx.recipient):
+        raise ValidationError("Coinbase recipient is not a valid toychain address")
     if tx.amount != BLOCK_REWARD:
         raise ValidationError(
             f"Coinbase amount must equal fixed block reward {BLOCK_REWARD}"

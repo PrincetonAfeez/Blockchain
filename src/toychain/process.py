@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -15,6 +16,8 @@ from typing import Any
 from .errors import CodecError, NodeRuntimeError, PersistenceError
 from .json_validation import reject_unknown_keys, validate_json_schema
 from .persistence import DataStore, read_json, write_json
+
+NODE_NAME_PATTERN = re.compile(r"^node[1-9][0-9]*$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +36,55 @@ class ProcessStatus:
             "port": self.port,
             "log_file": self.log_file,
         }
+
+
+def _network_root(base_dir: str | Path) -> Path:
+    return Path(base_dir).expanduser().resolve()
+
+
+def _read_network_registry(registry: Path) -> dict[str, Any]:
+    data = read_json(registry)
+    if not isinstance(data, dict) or not isinstance(data.get("nodes"), list):
+        raise NodeRuntimeError("Malformed local network registry")
+    try:
+        validate_json_schema(data, "local-network")
+        reject_unknown_keys(data, frozenset({"nodes"}), "local network registry")
+    except CodecError as exc:
+        raise NodeRuntimeError(str(exc)) from exc
+    return data
+
+
+def _resolve_registry_node_path(root: Path, entry: dict[str, Any]) -> Path:
+    if "data_dir" in entry:
+        raise NodeRuntimeError(
+            "Local network registry must use node names, not data_dir paths"
+        )
+    name = entry.get("name")
+    if not isinstance(name, str) or NODE_NAME_PATTERN.fullmatch(name) is None:
+        raise NodeRuntimeError(
+            f"Invalid local network node name: {name!r}; expected node[1-9][0-9]*"
+        )
+    candidate = (root / name).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError as exc:
+        raise NodeRuntimeError(
+            f"Local network node path escapes the network root: {name!r}"
+        ) from exc
+    return candidate
+
+
+def _verify_node_config_data_dir(node_path: Path) -> None:
+    store = DataStore(node_path)
+    if not store.config_path.exists():
+        return
+    try:
+        config = read_json(store.config_path)
+        configured = Path(str(config["data_dir"])).expanduser().resolve()
+    except (KeyError, PersistenceError, OSError, TypeError, ValueError) as exc:
+        raise NodeRuntimeError("Malformed node config.json") from exc
+    if configured != store.data_dir:
+        raise NodeRuntimeError("Node config data_dir does not match registry path")
 
 
 def process_is_running(pid: int) -> bool:
@@ -157,7 +209,7 @@ def run_local_network(
 ) -> list[ProcessStatus]:
     if nodes <= 0:
         raise NodeRuntimeError("Local network must contain at least one node")
-    root = Path(base_dir).expanduser().resolve()
+    root = _network_root(base_dir)
     root.mkdir(parents=True, exist_ok=True)
     statuses: list[ProcessStatus] = []
     try:
@@ -174,24 +226,30 @@ def run_local_network(
         raise
     write_json(
         root / "local-network.json",
-        {"nodes": [status.to_dict() for status in statuses]},
+        {
+            "nodes": [
+                {"name": f"node{index + 1}", "port": base_port + index}
+                for index in range(nodes)
+            ],
+        },
     )
     return statuses
 
 
 def network_status(base_dir: str | Path) -> list[ProcessStatus]:
-    registry = Path(base_dir).expanduser().resolve() / "local-network.json"
+    root = _network_root(base_dir)
+    registry = root / "local-network.json"
     if not registry.exists():
         return []
-    data = read_json(registry)
-    if not isinstance(data, dict) or not isinstance(data.get("nodes"), list):
-        raise NodeRuntimeError("Malformed local network registry")
-    try:
-        validate_json_schema(data, "local-network")
-        reject_unknown_keys(data, frozenset({"nodes"}), "local network registry")
-    except CodecError as exc:
-        raise NodeRuntimeError(str(exc)) from exc
-    return [node_status(item["data_dir"]) for item in data["nodes"]]
+    data = _read_network_registry(registry)
+    statuses: list[ProcessStatus] = []
+    for entry in data["nodes"]:
+        if not isinstance(entry, dict):
+            raise NodeRuntimeError("Malformed local network registry entry")
+        node_path = _resolve_registry_node_path(root, entry)
+        _verify_node_config_data_dir(node_path)
+        statuses.append(node_status(node_path))
+    return statuses
 
 
 def stop_local_network(base_dir: str | Path) -> list[ProcessStatus]:

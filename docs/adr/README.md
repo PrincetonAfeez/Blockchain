@@ -9,3 +9,5 @@ them. Each record is self-contained: Context, Decision, Consequences.
 - [0004 — Derived canonical tip and trusted fast-load](0004-derived-tip-and-trusted-load.md)
 - [0005 — Acceptance-only timestamp drift](0005-acceptance-only-timestamp-drift.md)
 - [0006 — Data format compatibility and migration policy](0006-data-format-compatibility.md)
+- [0007 — Canonical address validity at consensus validation](0007-canonical-address-validity.md)
+- [0008 — Local network registry path containment](0008-local-network-path-containment.md)

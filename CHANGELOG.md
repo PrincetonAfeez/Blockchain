@@ -49,4 +49,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `schema/`; strict `from_dict()` loading rejects unknown keys and coerced
   types.
 
+### Fixed
+
+- Consensus validation now rejects malformed `tc1` recipients on imported normal
+  transactions and malformed coinbase recipients on imported non-genesis blocks.
+- `local-network.json` stores relative node names only; registry paths are
+  resolved and contained under the network root before any stop/status side
+  effects.
+
 [1.0.0]: #

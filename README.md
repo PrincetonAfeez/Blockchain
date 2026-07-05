@@ -1,5 +1,7 @@
 # Toychain
 
+![CI](https://github.com/PrincetonAfeez/Blockchain/actions/workflows/ci.yml/badge.svg)
+
 Toychain is a complete educational blockchain CLI written in Python. It uses
 real Ed25519 signatures and SHA-256, but it is intentionally **not money** and
 has no production security or financial value.
@@ -27,8 +29,16 @@ toychain --data-dir demo mine --difficulty 8
 toychain --data-dir demo balance
 ```
 
-For a reproducible runtime environment, install the pinned dependency closure
-with `python -m pip install -r requirements.lock` before `pip install -e .`.
+For a reproducible runtime environment, install the pinned runtime dependency
+closure, then install the project without re-resolving dependencies:
+
+```powershell
+python -m pip install -r requirements.lock
+python -m pip install -e . --no-deps
+```
+
+CI verifies this path in the **lockfile** job so `requirements.lock` stays aligned
+with `pyproject.toml`.
 
 Mining the first normal block pays the local wallet the fixed reward of 50.
 You can then create another wallet in a different data directory and transfer
@@ -80,9 +90,12 @@ address   = "tc1" || first_20_bytes(SHA256("ADDRESS_V1\0" || public_key))
 ```
 
 A valid address is exactly `tc1` followed by 40 lowercase hexadecimal digits.
-Wallet-derived addresses always use this canonical form. `send` and an explicit
-`mine --miner` value are checked with the same rules; the default miner is the
-local wallet address. There is no checksum — verify the full address carefully.
+Wallet-derived addresses always use this canonical form. **Consensus validation**
+requires it for normal transaction senders and recipients and for non-genesis
+coinbase recipients (height 0 alone may use the special `GENESIS` label). Local
+`send`, explicit `mine --miner`, and JSON import all apply the same rules before
+a transaction or block can enter the mempool or chain. There is no checksum —
+verify the full address carefully.
 
 Hashing provides integrity, addressing, and block linking. Signatures provide
 authorization: mutating a signed transaction invalidates it. Proof of work
@@ -256,6 +269,10 @@ machine code, prove cryptographic security, or establish consensus correctness.
 pytest
 ```
 
+CI runs on Python 3.11–3.13 (`pytest`, `mypy`) and verifies the
+`requirements.lock` clean-install path on every push and pull request. Require
+the workflow to pass before merging to `main`.
+
 The suite protects canonical encoding, malformed parsing, signature tampering,
 Merkle proofs, PoW, deterministic genesis, replayed balances/nonces, mempool
 conflicts, most-work forks, reorg repair, persistence, and process lifecycle.
@@ -269,8 +286,9 @@ canonical tip, and equivalence of the trusted fast-load with full validation.
 The non-obvious decisions and their trade-offs are recorded as ADRs in
 [`docs/adr/`](docs/adr/README.md): canonical serialization and domain
 separation, the account model, most-work fork choice, the derived tip and
-trusted fast-load trust boundary, acceptance-only timestamp drift, and data
-format compatibility / migration policy.
+trusted fast-load trust boundary, acceptance-only timestamp drift, data
+format compatibility / migration policy, canonical address validity, and local
+network registry path containment.
 
 ## Changelog
 

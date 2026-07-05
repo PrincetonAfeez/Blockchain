@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://toychain.local/schema/coinbase-transaction.schema.json",
+  "title": "Toychain coinbase transaction",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "sender",
+    "recipient",
+    "amount",
+    "nonce",
+    "public_key",
+    "signature"
+  ],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1
+    },
+    "sender": {
+      "type": "string",
+      "const": "COINBASE"
+    },
+    "recipient": {
+      "oneOf": [
+        {
+          "const": "GENESIS"
+        },
+        {
+          "type": "string",
+          "pattern": "^tc1[0-9a-f]{40}$"
+        }
+      ]
+    },
+    "amount": {
+      "type": "integer"
+    },
+    "nonce": {
+      "type": "integer"
+    },
+    "public_key": {
+      "type": "string",
+      "pattern": "^$|^[0-9a-f]{16}$"
+    },
+    "signature": {
+      "type": "string",
+      "const": ""
+    }
+  }
+}

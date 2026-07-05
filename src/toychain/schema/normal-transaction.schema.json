@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://toychain.local/schema/normal-transaction.schema.json",
+  "title": "Toychain normal signed transaction",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "sender",
+    "recipient",
+    "amount",
+    "nonce",
+    "public_key",
+    "signature"
+  ],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1
+    },
+    "sender": {
+      "type": "string",
+      "pattern": "^tc1[0-9a-f]{40}$"
+    },
+    "recipient": {
+      "type": "string",
+      "pattern": "^tc1[0-9a-f]{40}$"
+    },
+    "amount": {
+      "type": "integer"
+    },
+    "nonce": {
+      "type": "integer"
+    },
+    "public_key": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "signature": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{128}$"
+    }
+  }
+}
