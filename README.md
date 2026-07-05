@@ -217,16 +217,22 @@ subprocess lifecycle, signal/stop-file shutdown, and isolation. Nodes do not
 gossip in the core project; blocks and transactions move between them with
 explicit import/export commands.
 
-`network run-local` writes `local-network.starting.json` before launching
-children and promotes it to `local-network.json` only after every node is
-ready. If startup fails, rollback stops or terminates started children using
-parent-held process handles; temporary registries are removed only after every
-spawned child is confirmed dead. When a child survives rollback (for example
-because `node stop` refused an unverified PID or termination failed),
+`network run-local` refuses to start when `local-network.json` already exists
+(use `network status` or `network stop-local` first), when
+`local-network.starting.json` records an unresolved recovery attempt, or when
+any planned node directory is already running or blocked by unverified or
+malformed lifecycle files. During startup the command writes only an
+attempt-scoped `local-network.starting.<uuid>.json` file; the final registry is
+written after every node is ready. If startup fails, rollback stops or
+terminates started children using parent-held process handles; temporary
+registries created by the current attempt are removed only after every spawned
+child is confirmed dead. When a child survives rollback (for example because
+`node stop` refused an unverified PID or termination failed),
 `local-network.starting.json` is preserved as a recovery registry with node
 name, port, PID, instance id, and lifecycle state. Inspect that file and use
 `node status` / `node stop` (or `node cleanup-stale --dangerous` after manual
-review) on the listed directories before retrying startup.
+review) on the listed directories before retrying startup. After confirming no
+live PIDs remain, remove a stale recovery file with `network dismiss-recovery`.
 
 ## Data format compatibility
 

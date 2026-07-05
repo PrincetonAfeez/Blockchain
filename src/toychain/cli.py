@@ -19,6 +19,7 @@ from .node_config import valid_port_arg
 from .persistence import read_json, write_json
 from .process import (
     cleanup_stale_node_files,
+    dismiss_local_network_recovery,
     network_status,
     node_status,
     run_local_network,
@@ -198,9 +199,8 @@ def _add_global_parser() -> argparse.ArgumentParser:
     run_local = network_sub.add_parser(
         "run-local",
         help=(
-            "start N isolated local nodes; on failure, rollback terminates "
-            "started children and preserves local-network.starting.json when "
-            "any live PID remains for recovery"
+            "start N isolated local nodes; refuses when a network or recovery "
+            "registry already exists"
         ),
     )
     run_local.add_argument("--nodes", type=int, default=3, help="number of nodes (default: 3)")
@@ -212,6 +212,13 @@ def _add_global_parser() -> argparse.ArgumentParser:
     )
     network_sub.add_parser("stop-local", help="stop every node in the local network")
     network_sub.add_parser("status", help="report the status of every local node")
+    network_sub.add_parser(
+        "dismiss-recovery",
+        help=(
+            "remove a stale local-network.starting.json recovery registry after "
+            "confirming no live PIDs remain"
+        ),
+    )
 
     debug_bytes = sub.add_parser("debug-bytes", help="print the exact hashed/signed bytes")
     debug_bytes.add_argument("kind", choices=("tx", "block"), help="object kind")
@@ -535,6 +542,10 @@ def _handle_process(args: argparse.Namespace) -> bool:
             statuses = run_local_network(args.data_dir, args.nodes, args.base_port)
         elif args.network_command == "stop-local":
             statuses = stop_local_network(args.data_dir)
+        elif args.network_command == "dismiss-recovery":
+            dismiss_local_network_recovery(args.data_dir)
+            _json({"dismissed": True})
+            return True
         else:
             statuses = network_status(args.data_dir)
         _json([status.to_dict() for status in statuses])

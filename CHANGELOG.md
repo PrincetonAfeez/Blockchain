@@ -39,6 +39,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   parent-held `Popen` handles instead of `ProcessStatus.running`, preserving
   `local-network.starting.json` when stop is refused or termination fails and
   any child remains alive.
+- `network run-local` preflight refuses to overwrite an active
+  `local-network.json`, an existing recovery registry, or blocked node
+  directories; only attempt-scoped starting files created by the current run
+  are deleted on rollback.
 - Consensus validation rejects malformed `tc1` recipients on imported normal
   transactions and malformed coinbase recipients on imported non-genesis blocks.
 - `local-network.json` paths are resolved and contained under the network root

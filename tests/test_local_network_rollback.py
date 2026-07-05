@@ -97,6 +97,7 @@ def test_rollback_preserves_registry_for_live_unverified_status(tmp_path, monkey
         monkeypatch.setattr("toychain.process._terminate_subprocess", lambda *_a, **_k: False)
 
         starting_registry = root / "local-network.starting.json"
+        attempt_registry = root / "local-network.starting.test-attempt.json"
         planned = [
             {
                 "name": "node1",
@@ -108,7 +109,8 @@ def test_rollback_preserves_registry_for_live_unverified_status(tmp_path, monkey
         with pytest.raises(NodeRuntimeError, match="recovery registry preserved"):
             _rollback_started_children(
                 [started],
-                starting_registry=starting_registry,
+                attempt_registry=attempt_registry,
+                recovery_registry=starting_registry,
                 planned_nodes=planned,
                 original_error=NodeRuntimeError("simulated failure"),
             )
@@ -144,10 +146,12 @@ def test_rollback_preserves_registry_for_malformed_live_pid(tmp_path, monkeypatc
         monkeypatch.setattr("toychain.process._terminate_subprocess", lambda *_a, **_k: False)
 
         starting_registry = root / "local-network.starting.json"
+        attempt_registry = root / "local-network.starting.test-attempt.json"
         with pytest.raises(NodeRuntimeError, match="recovery registry preserved"):
             _rollback_started_children(
                 [started],
-                starting_registry=starting_registry,
+                attempt_registry=attempt_registry,
+                recovery_registry=starting_registry,
                 planned_nodes=[{"name": "node1", "port": 9962}],
                 original_error=NodeRuntimeError("simulated failure"),
             )

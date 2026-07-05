@@ -8,6 +8,7 @@ import signal
 import subprocess
 import sys
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,9 @@ from .process_identity import (
 )
 
 NODE_NAME_PATTERN = re.compile(r"^node[1-9][0-9]*$")
+_BLOCKED_LOCAL_NETWORK_NODE_STATES = frozenset(
+    {"running_verified", "live_unverified", "malformed"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +72,88 @@ def _validate_network_ports(base_port: int, nodes: int) -> None:
         raise NodeRuntimeError("Local network must contain at least one node")
     if base_port + nodes - 1 > 65535:
         raise NodeRuntimeError("Local network port range exceeds 65535")
+
+
+def _planned_node_paths(root: Path, *, nodes: int) -> list[tuple[str, Path]]:
+    return [
+        (f"node{index + 1}", root / f"node{index + 1}")
+        for index in range(nodes)
+    ]
+
+
+def _assert_no_blocked_node_states(root: Path, *, nodes: int) -> None:
+    for node_name, node_path in _planned_node_paths(root, nodes=nodes):
+        status = node_status(node_path)
+        if status.state not in _BLOCKED_LOCAL_NETWORK_NODE_STATES:
+            continue
+        detail = f" ({status.message})" if status.message else ""
+        raise NodeRuntimeError(
+            f"Refusing local network startup: {node_name} is {status.state}{detail}; "
+            "resolve the node directory before retrying"
+        )
+
+
+def _recovery_registry_live_entries(data: dict[str, Any]) -> list[dict[str, Any]]:
+    live_entries: list[dict[str, Any]] = []
+    nodes = data.get("nodes")
+    if not isinstance(nodes, list):
+        return live_entries
+    for entry in nodes:
+        if not isinstance(entry, dict):
+            continue
+        pid = entry.get("pid")
+        if isinstance(pid, int) and process_is_running(pid):
+            live_entries.append(entry)
+    return live_entries
+
+
+def _preflight_local_network_start(root: Path, *, nodes: int) -> None:
+    registry = root / "local-network.json"
+    recovery = root / "local-network.starting.json"
+    if registry.exists():
+        raise NodeRuntimeError(
+            "Local network registry already exists; use 'network status' or "
+            "'network stop-local' before running 'network run-local' again"
+        )
+    if recovery.exists():
+        raise NodeRuntimeError(
+            f"Unresolved local network recovery registry at {recovery}; resolve "
+            "surviving node processes before retrying, or run 'network "
+            "dismiss-recovery' after confirming no live PIDs remain"
+        )
+    for orphan in root.glob("local-network.starting.*.json"):
+        raise NodeRuntimeError(
+            f"Incomplete local network startup file {orphan} exists; remove it "
+            "after confirming no live PIDs remain or run 'network dismiss-recovery'"
+        )
+    _assert_no_blocked_node_states(root, nodes=nodes)
+
+
+def dismiss_local_network_recovery(base_dir: str | Path) -> None:
+    root = _network_root(base_dir)
+    recovery = root / "local-network.starting.json"
+    orphan_paths = sorted(root.glob("local-network.starting.*.json"))
+    targets = ([recovery] if recovery.exists() else []) + [
+        path for path in orphan_paths if path != recovery
+    ]
+    if not targets:
+        raise NodeRuntimeError("No local network recovery registry to dismiss")
+    live_entries: list[dict[str, Any]] = []
+    for path in targets:
+        try:
+            data = read_json(path)
+        except PersistenceError as exc:
+            raise NodeRuntimeError(f"Malformed recovery registry at {path}") from exc
+        if not isinstance(data, dict):
+            raise NodeRuntimeError(f"Malformed recovery registry at {path}")
+        live_entries.extend(_recovery_registry_live_entries(data))
+    if live_entries:
+        pids = ", ".join(str(entry.get("pid")) for entry in live_entries)
+        raise NodeRuntimeError(
+            f"Refusing to dismiss recovery registry while live PIDs remain: {pids}"
+        )
+    for path in targets:
+        path.unlink(missing_ok=True)
 
 
 def _read_network_registry(registry: Path) -> dict[str, Any]:
@@ -518,7 +604,8 @@ def _update_starting_registry_entry(
 def _rollback_started_children(
     started_children: list[StartedChild],
     *,
-    starting_registry: Path,
+    attempt_registry: Path,
+    recovery_registry: Path,
     planned_nodes: list[dict[str, Any]],
     original_error: Exception,
 ) -> None:
@@ -572,7 +659,7 @@ def _rollback_started_children(
 
     if recovery_nodes:
         write_json(
-            starting_registry,
+            recovery_registry,
             {
                 "nodes": recovery_nodes,
                 "planned_nodes": planned_nodes,
@@ -584,9 +671,10 @@ def _rollback_started_children(
                 "startup_error": str(original_error),
             },
         )
+        attempt_registry.unlink(missing_ok=True)
         raise NodeRuntimeError(
             "Local network startup failed and live children remain; "
-            f"recovery registry preserved at {starting_registry}"
+            f"recovery registry preserved at {recovery_registry}"
         ) from original_error
 
 
@@ -598,8 +686,11 @@ def run_local_network(
     _validate_network_ports(base_port, nodes)
     root = _network_root(base_dir)
     root.mkdir(parents=True, exist_ok=True)
+    _preflight_local_network_start(root, nodes=nodes)
+
     registry = root / "local-network.json"
-    starting_registry = root / "local-network.starting.json"
+    recovery_registry = root / "local-network.starting.json"
+    attempt_registry = root / f"local-network.starting.{uuid.uuid4()}.json"
     planned_nodes = [
         {
             "name": f"node{index + 1}",
@@ -610,8 +701,9 @@ def run_local_network(
         for index in range(nodes)
     ]
     started_children: list[StartedChild] = []
+    created_final_registry = False
     try:
-        _write_starting_registry(starting_registry, {"nodes": planned_nodes})
+        _write_starting_registry(attempt_registry, {"nodes": planned_nodes})
         for index in range(nodes):
             node_name = f"node{index + 1}"
             node_port = base_port + index
@@ -622,7 +714,7 @@ def run_local_network(
             )
             started_children.append(started)
             _update_starting_registry_entry(
-                starting_registry,
+                attempt_registry,
                 name=node_name,
                 instance_id=started.instance_id,
                 pid=started.status.pid,
@@ -636,20 +728,24 @@ def run_local_network(
                 ],
             },
         )
-        starting_registry.unlink(missing_ok=True)
+        created_final_registry = True
+        attempt_registry.unlink(missing_ok=True)
         return [child.status for child in started_children]
     except Exception as exc:
-        registry.unlink(missing_ok=True)
+        if created_final_registry:
+            registry.unlink(missing_ok=True)
         try:
             _rollback_started_children(
                 started_children,
-                starting_registry=starting_registry,
+                attempt_registry=attempt_registry,
+                recovery_registry=recovery_registry,
                 planned_nodes=planned_nodes,
                 original_error=exc,
             )
         except NodeRuntimeError:
             raise
-        starting_registry.unlink(missing_ok=True)
+        if attempt_registry.exists():
+            attempt_registry.unlink(missing_ok=True)
         raise
 
 
