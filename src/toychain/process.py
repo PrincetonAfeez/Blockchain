@@ -770,6 +770,51 @@ def cleanup_stale_node_files(store: DataStore, *, force: bool = False) -> None:
 
 
 def stop_local_network(base_dir: str | Path) -> list[ProcessStatus]:
-    statuses = network_status(base_dir)
-    stopped = [stop_node(status.data_dir) for status in statuses]
-    return stopped
+    root = _network_root(base_dir)
+    registry = root / "local-network.json"
+    if not registry.exists():
+        return []
+
+    registered = network_status(base_dir)
+    stop_failures: list[str] = []
+
+    for status in registered:
+        try:
+            stop_node(status.data_dir)
+        except NodeRuntimeError as exc:
+            stop_failures.append(f"{status.data_dir}: {exc}")
+
+    final_statuses = [node_status(status.data_dir) for status in registered]
+    live_nodes = [
+        f"{status.data_dir}: PID {status.pid} remains live (state={status.state})"
+        for status in final_statuses
+        if status.pid_is_live
+    ]
+
+    if stop_failures or live_nodes:
+        issues = stop_failures + live_nodes
+        raise NodeRuntimeError(
+            "Local network shutdown incomplete; registry preserved at "
+            f"{registry}. Issues: " + "; ".join(issues)
+        )
+
+    registry.unlink(missing_ok=True)
+    return final_statuses
+
+
+def dismiss_local_network_registry(base_dir: str | Path) -> None:
+    root = _network_root(base_dir)
+    registry = root / "local-network.json"
+    if not registry.exists():
+        raise NodeRuntimeError("No local network registry to dismiss")
+    live_nodes = [
+        f"{status.data_dir}: PID {status.pid} remains live (state={status.state})"
+        for status in network_status(base_dir)
+        if status.pid_is_live
+    ]
+    if live_nodes:
+        raise NodeRuntimeError(
+            "Refusing to dismiss local network registry while live PIDs remain: "
+            + "; ".join(live_nodes)
+        )
+    registry.unlink(missing_ok=True)

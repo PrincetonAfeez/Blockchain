@@ -233,6 +233,11 @@ name, port, PID, instance id, and lifecycle state. Inspect that file and use
 `node status` / `node stop` (or `node cleanup-stale --dangerous` after manual
 review) on the listed directories before retrying startup. After confirming no
 live PIDs remain, remove a stale recovery file with `network dismiss-recovery`.
+`network stop-local` stops every registered node, confirms each PID is dead,
+and removes `local-network.json` so a later `network run-local` can succeed.
+If shutdown is incomplete the registry is preserved. Use
+`network dismiss-registry` only after manually confirming every registered PID
+is dead.
 
 ## Data format compatibility
 

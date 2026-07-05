@@ -20,6 +20,7 @@ from .persistence import read_json, write_json
 from .process import (
     cleanup_stale_node_files,
     dismiss_local_network_recovery,
+    dismiss_local_network_registry,
     network_status,
     node_status,
     run_local_network,
@@ -217,6 +218,13 @@ def _add_global_parser() -> argparse.ArgumentParser:
         help=(
             "remove a stale local-network.starting.json recovery registry after "
             "confirming no live PIDs remain"
+        ),
+    )
+    network_sub.add_parser(
+        "dismiss-registry",
+        help=(
+            "remove local-network.json after confirming every registered node "
+            "PID is dead"
         ),
     )
 
@@ -544,6 +552,10 @@ def _handle_process(args: argparse.Namespace) -> bool:
             statuses = stop_local_network(args.data_dir)
         elif args.network_command == "dismiss-recovery":
             dismiss_local_network_recovery(args.data_dir)
+            _json({"dismissed": True})
+            return True
+        elif args.network_command == "dismiss-registry":
+            dismiss_local_network_registry(args.data_dir)
             _json({"dismissed": True})
             return True
         else:

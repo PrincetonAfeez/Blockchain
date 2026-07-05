@@ -11,15 +11,99 @@ from toychain.errors import NodeRuntimeError
 from toychain.persistence import DataStore, write_json
 from toychain.process import (
     dismiss_local_network_recovery,
+    dismiss_local_network_registry,
     node_status,
+    process_is_running,
     run_local_network,
     start_node_with_handle,
     stop_local_network,
+    stop_node,
 )
 
 
 def _write_registry(root, payload: dict) -> None:
     write_json(root / "local-network.json", payload)
+
+
+def test_run_local_stop_local_run_local_cycle(tmp_path):
+    root = tmp_path / "network"
+    first = run_local_network(root, nodes=2, base_port=9910)
+    assert len(first) == 2
+    assert (root / "local-network.json").exists()
+
+    stopped = stop_local_network(root)
+    assert len(stopped) == 2
+    assert not any(status.pid_is_live for status in stopped)
+    assert not (root / "local-network.json").exists()
+
+    second = run_local_network(root, nodes=2, base_port=9910)
+    assert len(second) == 2
+    assert all(status.running for status in second)
+    stop_local_network(root)
+
+
+def test_stop_local_attempts_every_node_when_one_stop_fails(tmp_path, monkeypatch):
+    root = tmp_path / "network"
+    run_local_network(root, nodes=2, base_port=9915)
+    original = (root / "local-network.json").read_bytes()
+    calls: list[str] = []
+
+    def flaky_stop(data_dir, timeout=5.0):
+        calls.append(str(data_dir))
+        if str(data_dir).endswith("node1"):
+            raise NodeRuntimeError("simulated stop failure for node1")
+        return stop_node(data_dir, timeout=timeout)
+
+    monkeypatch.setattr("toychain.process.stop_node", flaky_stop)
+
+    with pytest.raises(NodeRuntimeError, match="shutdown incomplete"):
+        stop_local_network(root)
+
+    assert len(calls) == 2
+    assert (root / "local-network.json").read_bytes() == original
+
+    monkeypatch.setattr("toychain.process.stop_node", stop_node)
+    stop_local_network(root)
+
+
+def test_stop_local_preserves_registry_when_pid_remains_live(tmp_path, monkeypatch):
+    root = tmp_path / "network"
+    run_local_network(root, nodes=1, base_port=9920)
+    original = (root / "local-network.json").read_bytes()
+    real_status = node_status
+    live_pid = node_status(root / "node1").pid
+
+    def fake_status(data_dir):
+        status = real_status(data_dir)
+        if str(data_dir).endswith("node1"):
+            return replace(
+                status,
+                running=False,
+                verified=False,
+                state="live_unverified",
+                pid=live_pid,
+            )
+        return status
+
+    monkeypatch.setattr(
+        "toychain.process.stop_node",
+        lambda *_a, **_k: (_ for _ in ()).throw(NodeRuntimeError("refused")),
+    )
+    monkeypatch.setattr("toychain.process.node_status", fake_status)
+    monkeypatch.setattr(
+        "toychain.process.process_is_running",
+        lambda pid: pid == live_pid,
+    )
+
+    with pytest.raises(NodeRuntimeError, match="registry preserved"):
+        stop_local_network(root)
+
+    assert (root / "local-network.json").read_bytes() == original
+
+    monkeypatch.setattr("toychain.process.stop_node", stop_node)
+    monkeypatch.setattr("toychain.process.node_status", node_status)
+    monkeypatch.setattr("toychain.process.process_is_running", process_is_running)
+    stop_local_network(root)
 
 
 def test_rerun_preserves_active_network_registry(tmp_path):

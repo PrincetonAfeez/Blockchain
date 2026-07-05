@@ -43,6 +43,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `local-network.json`, an existing recovery registry, or blocked node
   directories; only attempt-scoped starting files created by the current run
   are deleted on rollback.
+- `network stop-local` removes `local-network.json` after every registered node
+  PID is confirmed dead; the registry is preserved when shutdown is incomplete.
 - Consensus validation rejects malformed `tc1` recipients on imported normal
   transactions and malformed coinbase recipients on imported non-genesis blocks.
 - `local-network.json` paths are resolved and contained under the network root
